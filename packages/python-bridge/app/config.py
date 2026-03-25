@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     external_api_url: str = ""
     external_api_key: str = ""
 
+    external_ftp_host: Optional[str] = None
+    external_ftp_user: Optional[str] = None
+    external_ftp_pass: Optional[str] = None
+    external_ftp_port: Optional[int] = 22
+    
     @property
     def cors_origins_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":
