@@ -16,6 +16,10 @@ class StorageFTPClient:
         self.password = getattr(settings, 'external_ftp_pass', None) or getattr(settings, 'ftp_pass', None)
         self.port = getattr(settings, 'external_ftp_port', None) or getattr(settings, 'ftp_port', 21)
         self.base_dir = getattr(settings, 'external_ftp_dir', None) or getattr(settings, 'ftp_upload_dir', '/')
+        
+        # Debug logging
+        logger.info(f"FTP Client initialized: host={self.host}, port={self.port}, user={self.user}, base_dir={self.base_dir}")
+        logger.info(f"Raw settings: ftp_host={getattr(settings, 'ftp_host', None)}, external_ftp_host={getattr(settings, 'external_ftp_host', None)}")
 
     def _get_connection(self):
         """Create FTP or SFTP connection based on port."""
@@ -69,8 +73,14 @@ class StorageFTPClient:
 
     def upload_bytes(self, data: bytes, remote_rel_path: str) -> bool:
         """Upload raw bytes to the remote FTP/SFTP server."""
-        if not self.host or not self.user:
-            logger.warning("FTP upload skipped: host or user not configured")
+        if not self.host:
+            logger.warning("FTP upload skipped: FTP_HOST not configured")
+            return False
+        if not self.user:
+            logger.warning("FTP upload skipped: FTP_USER not configured")
+            return False
+        if not self.password:
+            logger.warning("FTP upload skipped: FTP_PASS not configured")
             return False
 
         conn = None
