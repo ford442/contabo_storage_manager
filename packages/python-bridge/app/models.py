@@ -33,3 +33,11 @@ class SyncResponse(BaseModel):
     status: str
     destination: str
     bytes_transferred: int = 0
+
+
+class FileUploadResponse(BaseModel):
+    """Response model for app-specific webhook endpoints that store files."""
+
+    status: str
+    message: str
+    files: list[str] = Field(default_factory=list, description="Relative paths of all saved files")

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .logger import get_logger
 from .sync import run_poll_loop
-from .webhooks import router as webhook_router
+from .webhooks import files_router, router as webhook_router
 
 settings = get_settings()
 log = get_logger("main")
@@ -49,6 +49,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(webhook_router)
+app.include_router(files_router)  # Static file server: GET /files/{path}
 
 
 # ── Health / root ─────────────────────────────────────────────────────────────
