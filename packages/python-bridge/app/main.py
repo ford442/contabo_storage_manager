@@ -4,6 +4,7 @@ import logging
 
 from .config import settings
 from .webhooks import webhook_router, files_router
+from .api import api_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(webhook_router)
-app.include_router(files_router)   # ← New static files router
+app.include_router(files_router)   # ← Static files router
+app.include_router(api_router)     # ← API endpoints for shaders, images, ratings
 
 @app.get("/health")
 async def health_check():
