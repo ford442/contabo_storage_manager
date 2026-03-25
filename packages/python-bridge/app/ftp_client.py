@@ -7,6 +7,7 @@ from .logger import get_logger
 
 logger = get_logger("ftp_client")
 
+
 class StorageFTPClient:
     def __init__(self):
         self.host = settings.external_ftp_host
@@ -15,61 +16,99 @@ class StorageFTPClient:
         self.port = settings.external_ftp_port or 21
         self.base_dir = settings.external_ftp_dir or "/"
 
-    def _get_connection(self) -> ftplib.FTP_TLS:
+    def _get_connection(self):
+        """Create FTP or SFTP connection based on port."""
+        # Port 22 typically indicates SFTP (SSH)
+        if self.port == 22:
+            return self._get_sftp_connection()
+        else:
+            return self._get_ftps_connection()
+
+    def _get_ftps_connection(self):
         """Create a secure FTP_TLS connection."""
+        logger.info(f"Connecting to FTPS server {self.host}:{self.port}")
         ftp = ftplib.FTP_TLS()
         ftp.connect(self.host, self.port, timeout=30)
         ftp.login(self.user, self.password)
         ftp.prot_p()  # Switch to secure data connection
         return ftp
 
-    def _ensure_remote_dir(self, ftp: ftplib.FTP_TLS, rel_path: str):
-        """Recursively create directories on the FTP server."""
+    def _get_sftp_connection(self):
+        """Create an SFTP connection using paramiko."""
+        try:
+            import paramiko
+        except ImportError:
+            logger.error("paramiko is required for SFTP connections")
+            raise
+
+        logger.info(f"Connecting to SFTP server {self.host}:{self.port}")
+        transport = paramiko.Transport((self.host, self.port))
+        transport.connect(username=self.user, password=self.password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        return sftp
+
+    def _ensure_remote_dir(self, ftp, rel_path: str):
+        """Recursively create directories on the FTP/SFTP server."""
         parts = rel_path.strip("/").split("/")
         current_path = self.base_dir.rstrip("/")
         
         for part in parts:
             current_path = f"{current_path}/{part}"
             try:
-                ftp.cwd(current_path)
-            except ftplib.error_perm:
+                if hasattr(ftp, 'cwd'):  # FTPS
+                    ftp.cwd(current_path)
+                else:  # SFTP
+                    ftp.stat(current_path)
+            except (ftplib.error_perm, IOError):
                 logger.info(f"Creating remote directory: {current_path}")
-                ftp.mkd(current_path)
+                if hasattr(ftp, 'mkd'):  # FTPS
+                    ftp.mkd(current_path)
+                else:  # SFTP
+                    ftp.mkdir(current_path)
 
     def upload_bytes(self, data: bytes, remote_rel_path: str) -> bool:
-        """Upload raw bytes to the remote FTP server."""
+        """Upload raw bytes to the remote FTP/SFTP server."""
         if not self.host or not self.user:
+            logger.warning("FTP upload skipped: host or user not configured")
             return False
 
-        ftp = None
+        conn = None
         try:
-            ftp = self._get_connection()
+            conn = self._get_connection()
             
             # 1. Ensure the subfolders exist (e.g., image-effects/shaders)
             remote_path_obj = Path(remote_rel_path)
             if remote_path_obj.parent != Path("."):
-                self._ensure_remote_dir(ftp, str(remote_path_obj.parent))
+                self._ensure_remote_dir(conn, str(remote_path_obj.parent))
 
             # 2. Upload the file
             target_file = f"{self.base_dir.rstrip('/')}/{remote_rel_path.lstrip('/')}"
             
-            # We use a BytesIO wrapper to send raw bytes via storbinary
-            import io
-            bio = io.BytesIO(data)
-            ftp.storbinary(f"STOR {target_file}", bio)
+            if hasattr(conn, 'storbinary'):  # FTPS
+                import io
+                bio = io.BytesIO(data)
+                conn.storbinary(f"STOR {target_file}", bio)
+            else:  # SFTP
+                import io
+                bio = io.BytesIO(data)
+                conn.putfo(bio, target_file)
             
-            logger.info(f"Successfully bridged file to DreamHost: {target_file}")
+            logger.info(f"Successfully uploaded to: {target_file}")
             return True
 
         except Exception as e:
-            logger.error(f"DreamHost FTP Bridge failed: {e}")
+            logger.error(f"FTP upload failed: {e}")
             return False
         finally:
-            if ftp:
+            if conn:
                 try:
-                    ftp.quit()
+                    if hasattr(conn, 'quit'):  # FTPS
+                        conn.quit()
+                    else:  # SFTP
+                        conn.close()
                 except:
                     pass
+
 
 # Global helper function used in webhooks.py
 def upload_bytes(data: bytes, rel_path: str):
