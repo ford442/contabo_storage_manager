@@ -1,68 +1,81 @@
-"""FTP helper: uploads files to vsftpd via ftplib (stdlib, no extra deps)."""
+import paramiko
+import logging
+from pathlib import Path
+from typing import Optional
 
-from __future__ import annotations
+logger = logging.getLogger(__name__)
 
-import ftplib
-import io
-import ssl
-from pathlib import Path, PurePosixPath
+class StorageFTPClient:
+    """Handles uploading files from the bridge to external FTP/SFTP storage."""
 
-from .config import get_settings
-from .logger import get_logger
+    def __init__(self):
+        self.client = None
+        self.is_sftp = True  # Default to secure SFTP
 
-log = get_logger("ftp")
+    def connect(self) -> bool:
+        """Connect using env variables."""
+        host = settings.external_ftp_host
+        user = settings.external_ftp_user
+        password = settings.external_ftp_pass
+        port = settings.external_ftp_port or (22 if self.is_sftp else 21)
 
+        if not host or not user or not password:
+            logger.warning("External FTP not configured - skipping upload")
+            return False
 
-def _connect() -> ftplib.FTP:
-    settings = get_settings()
-    if settings.ftp_tls:
-        ctx = ssl.create_default_context()
-        ftp: ftplib.FTP = ftplib.FTP_TLS(context=ctx)
-    else:
-        ftp = ftplib.FTP()
-
-    ftp.connect(settings.ftp_host, settings.ftp_port, timeout=15)
-    ftp.login(settings.ftp_user, settings.ftp_pass)
-
-    if settings.ftp_tls and isinstance(ftp, ftplib.FTP_TLS):
-        ftp.prot_p()
-
-    return ftp
-
-
-def _ensure_dirs(ftp: ftplib.FTP, remote_path: PurePosixPath) -> None:
-    """Recursively create remote directories if they do not exist."""
-    parts = remote_path.parts
-    for i in range(1, len(parts) + 1):
-        d = str(PurePosixPath(*parts[:i]))
         try:
-            ftp.mkd(d)
-        except ftplib.error_perm:
-            pass  # already exists
+            if self.is_sftp:
+                transport = paramiko.Transport((host, port))
+                transport.connect(username=user, password=password)
+                self.client = paramiko.SFTPClient.from_transport(transport)
+            else:
+                # Plain FTP fallback (less recommended)
+                self.client = paramiko.SSHClient()
+                self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                self.client.connect(host, port=port, username=user, password=password)
+            logger.info(f"Connected to external FTP: {host}")
+            return True
+        except Exception as e:
+            logger.error(f"FTP connection failed: {e}")
+            return False
 
+    async def upload(self, local_path: str | Path, remote_rel_path: str) -> Optional[str]:
+        """Upload file and return remote path if successful."""
+        if not self.connect():
+            return None
 
-def upload_bytes(data: bytes, remote_relative_path: str) -> int:
-    """Upload *data* to FTP. Returns bytes uploaded."""
-    settings = get_settings()
-    base = PurePosixPath(settings.ftp_upload_dir)
-    remote = base / remote_relative_path.lstrip("/")
-
-    ftp = _connect()
-    try:
-        _ensure_dirs(ftp, remote.parent)
-        buf = io.BytesIO(data)
-        ftp.storbinary(f"STOR {remote}", buf)
-        log.info("FTP upload OK → %s (%d bytes)", remote, len(data))
-        return len(data)
-    finally:
         try:
-            ftp.quit()
-        except Exception:
-            pass
+            remote_full = f"/{remote_rel_path.lstrip('/')}"
+            remote_dir = str(Path(remote_full).parent)
+
+            # Create remote directory if it doesn't exist
+            try:
+                if self.is_sftp:
+                    self.client.mkdir(remote_dir)
+            except:
+                pass  # Directory may already exist
+
+            if self.is_sftp:
+                self.client.put(str(local_path), remote_full)
+            else:
+                # Plain FTP logic (simplified)
+                sftp = self.client.open_sftp()
+                sftp.put(str(local_path), remote_full)
+                sftp.close()
+
+            logger.info(f"Uploaded: {local_path} → {remote_full}")
+            return remote_rel_path
+
+        except Exception as e:
+            logger.error(f"Upload failed for {local_path}: {e}")
+            return None
+        finally:
+            if self.client:
+                try:
+                    self.client.close()
+                except:
+                    pass
 
 
-def upload_file(local_path: str | Path, remote_relative_path: str) -> int:
-    """Upload a local file to FTP. Returns bytes uploaded."""
-    local = Path(local_path)
-    data = local.read_bytes()
-    return upload_bytes(data, remote_relative_path)
+# Global instance
+ftp_client = StorageFTPClient()
