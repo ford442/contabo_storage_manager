@@ -16,11 +16,21 @@ class Settings(BaseSettings):
     static_base_url: str = "http://localhost:8000/files"
     max_upload_mb: int = 512
 
+    # Logging
+    log_level: str = "info"
+    log_file: str = "/var/log/ftpbridge/app.log"
+
     # External SFTP/FTP (used by paramiko)
     external_ftp_host: Optional[str] = None
     external_ftp_user: Optional[str] = None
     external_ftp_pass: Optional[str] = None
     external_ftp_port: Optional[int] = 22
+    external_ftp_dir: Optional[str] = "/"
+
+    # Polling settings
+    external_api_url: Optional[str] = None
+    external_api_key: Optional[str] = None
+    poll_interval_seconds: int = 60
 
     class Config:
         env_file = ".env"
