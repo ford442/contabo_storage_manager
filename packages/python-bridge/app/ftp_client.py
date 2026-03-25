@@ -75,3 +75,34 @@ class StorageFTPClient:
 def upload_bytes(data: bytes, rel_path: str):
     client = StorageFTPClient()
     return client.upload_bytes(data, rel_path)
+
+
+# Singleton instance for webhooks.py
+class FTPClientWrapper:
+    """Async wrapper for StorageFTPClient for use in webhooks."""
+    
+    async def upload(self, local_path: Path, rel_path: str) -> Optional[str]:
+        """Upload a file from local path to FTP.
+        
+        Args:
+            local_path: Path to the local file
+            rel_path: Relative path on the remote server
+            
+        Returns:
+            The remote path if successful, None otherwise
+        """
+        import asyncio
+        from pathlib import Path
+        
+        def _upload():
+            client = StorageFTPClient()
+            data = Path(local_path).read_bytes()
+            success = client.upload_bytes(data, rel_path)
+            return rel_path if success else None
+        
+        # Run sync FTP upload in thread pool
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _upload)
+
+
+ftp_client = FTPClientWrapper()
