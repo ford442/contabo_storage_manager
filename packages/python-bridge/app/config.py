@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     external_api_key: Optional[str] = None
     poll_interval_seconds: int = 60
 
+    # FTP settings (alternative to EXTERNAL_FTP_*)
+    ftp_host: Optional[str] = None
+    ftp_port: int = 21
+    ftp_user: Optional[str] = None
+    ftp_pass: Optional[str] = None
+    ftp_upload_dir: str = "/"
+    ftp_tls: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
