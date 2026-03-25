@@ -2,11 +2,10 @@ import ftplib
 import ssl
 from pathlib import Path
 from typing import Optional
-from .config import get_settings
+from .config import settings
 from .logger import get_logger
 
 logger = get_logger("ftp_client")
-settings = get_settings()
 
 class StorageFTPClient:
     def __init__(self):
