@@ -11,11 +11,12 @@ logger = get_logger("ftp_client")
 class StorageFTPClient:
     def __init__(self):
         # Support both EXTERNAL_FTP_* and FTP_* variables
-        self.host = getattr(settings, 'external_ftp_host', None) or getattr(settings, 'ftp_host', None)
-        self.user = getattr(settings, 'external_ftp_user', None) or getattr(settings, 'ftp_user', None)
-        self.password = getattr(settings, 'external_ftp_pass', None) or getattr(settings, 'ftp_pass', None)
-        self.port = getattr(settings, 'external_ftp_port', None) or getattr(settings, 'ftp_port', 21)
-        self.base_dir = getattr(settings, 'external_ftp_dir', None) or getattr(settings, 'ftp_upload_dir', '/')
+        # Priority: FTP_* (user settings) > EXTERNAL_FTP_* (legacy)
+        self.host = getattr(settings, 'ftp_host', None) or getattr(settings, 'external_ftp_host', None)
+        self.user = getattr(settings, 'ftp_user', None) or getattr(settings, 'external_ftp_user', None)
+        self.password = getattr(settings, 'ftp_pass', None) or getattr(settings, 'external_ftp_pass', None)
+        self.port = getattr(settings, 'ftp_port', None) or getattr(settings, 'external_ftp_port', 21)
+        self.base_dir = getattr(settings, 'ftp_upload_dir', None) or getattr(settings, 'external_ftp_dir', '/')
         
         # Debug logging
         logger.info(f"FTP Client initialized: host={self.host}, port={self.port}, user={self.user}, base_dir={self.base_dir}")
