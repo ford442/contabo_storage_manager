@@ -1,0 +1,22 @@
+[Unit]
+Description=FTP Bridge – Python (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=ftpbridge
+WorkingDirectory=/opt/contabo_storage_manager/packages/python-bridge
+EnvironmentFile=/opt/contabo_storage_manager/.env
+ExecStart=/opt/contabo_storage_manager/.venv/bin/uvicorn \
+    app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ftpbridge-python
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,25 @@
+FROM node:20-slim
+
+LABEL maintainer="ftpbridge"
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Node dependencies
+COPY packages/node-bridge/package*.json ./
+RUN npm ci --omit=dev
+
+# Copy application source
+COPY packages/node-bridge/src ./src
+COPY packages/shared ./shared
+
+# Create log and data dirs
+RUN mkdir -p /var/log/ftpbridge /data/files
+
+EXPOSE 3000
+
+CMD ["node", "src/index.js"]

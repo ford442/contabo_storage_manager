@@ -1,0 +1,18 @@
+[Unit]
+Description=FTP Bridge – Node (Express)
+After=network.target
+
+[Service]
+Type=simple
+User=ftpbridge
+WorkingDirectory=/opt/contabo_storage_manager/packages/node-bridge
+EnvironmentFile=/opt/contabo_storage_manager/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ftpbridge-node
+
+[Install]
+WantedBy=multi-user.target

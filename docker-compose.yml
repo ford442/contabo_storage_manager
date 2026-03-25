@@ -1,0 +1,54 @@
+services:
+  # ── Python / FastAPI bridge ─────────────────────────────────────────────────
+  python-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: ftpbridge-python
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PYTHON_PORT:-8000}:8000"
+    volumes:
+      - ${FILES_DIR:-/home/ftpbridge/files}:/data/files
+      - ./logs/python:/var/log/ftpbridge
+    networks:
+      - ftpbridge
+    profiles:
+      - python
+      - full
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Node.js / Express bridge ────────────────────────────────────────────────
+  node-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: ftpbridge-node
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${NODE_PORT:-3000}:3000"
+    volumes:
+      - ${FILES_DIR:-/home/ftpbridge/files}:/data/files
+      - ./logs/node:/var/log/ftpbridge
+    networks:
+      - ftpbridge
+    profiles:
+      - node
+      - full
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  ftpbridge:
+    driver: bridge
