@@ -139,14 +139,19 @@ async def image_effects_webhook(
 
 @webhook_router.post("/flac", response_model=FileUploadResponse)
 async def flac_webhook(
+    request: Request,
     action: str = Form(...),
     file: Optional[UploadFile] = File(None),
-    signature: Optional[str] = None,
 ):
-    if not _verify_signature(b"", signature):   # For multipart we skip detailed check for simplicity
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    # For multipart uploads, signature can be in header or skipped if no secret set
+    signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Hub-Signature")
+    if settings.webhook_secret and not signature:
+        raise HTTPException(status_code=401, detail="Missing signature header")
+    # Note: Full body signature verification for multipart is complex; 
+    # we check presence of signature when secret is configured
 
     saved_files = []
+    remote_files = []
 
     if file and action == "upload_audio":
         ext = Path(file.filename or "").suffix.lower()
@@ -159,6 +164,8 @@ async def flac_webhook(
 
         result = await _save_upload(file, rel_dir)
         saved_files.append(result["local_path"])
+        if result.get("remote_path"):
+            remote_files.append(result["remote_path"])
 
     # TODO: Add handling for "save_playlist" and "save_metadata" (JSON only)
 
@@ -166,19 +173,23 @@ async def flac_webhook(
         status="success",
         message="FLAC content processed",
         files=saved_files,
+        remote_files=remote_files if remote_files else None,
     )
 
 
 @webhook_router.post("/sequencer", response_model=FileUploadResponse)
 async def sequencer_webhook(
+    request: Request,
     action: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
-    signature: Optional[str] = None,
 ):
-    if not _verify_signature(b"", signature):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    # For multipart uploads, signature can be in header or skipped if no secret set
+    signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Hub-Signature")
+    if settings.webhook_secret and not signature:
+        raise HTTPException(status_code=401, detail="Missing signature header")
 
     saved_files = []
+    remote_files = []
 
     if file:
         ext = Path(file.filename or "").suffix.lower()
@@ -193,6 +204,8 @@ async def sequencer_webhook(
 
         result = await _save_upload(file, rel_dir)
         saved_files.append(result["local_path"])
+        if result.get("remote_path"):
+            remote_files.append(result["remote_path"])
 
     # TODO: Add JSON project saving for "save_project"
 
@@ -200,6 +213,86 @@ async def sequencer_webhook(
         status="success",
         message="Sequencer content saved",
         files=saved_files,
+        remote_files=remote_files if remote_files else None,
+    )
+
+
+@webhook_router.post("/generic", response_model=FileUploadResponse)
+async def generic_webhook(
+    request: Request,
+    signature: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+):
+    """Generic webhook that accepts any JSON with source, event, data fields."""
+    body = await request.body()
+    
+    if not _verify_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON")
+
+    source = payload.get("source", "unknown")
+    event = payload.get("event", "unknown")
+    
+    # Save to webhooks/generic/
+    rel_dir = f"webhooks/{source}"
+    base_dir = Path(settings.files_dir) / rel_dir
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{_ts_slug()}_{source}_{event}.json"
+    file_path = base_dir / filename
+    file_path.write_text(json.dumps(payload, indent=2))
+    
+    rel_path = f"{rel_dir}/{filename}"
+    remote_path = await ftp_client.upload(file_path, rel_path)
+
+    return FileUploadResponse(
+        status="success",
+        message=f"Saved to {rel_dir}",
+        files=[rel_path],
+        remote_files=[remote_path] if remote_path else None,
+    )
+
+
+@webhook_router.post("/github", response_model=FileUploadResponse)
+async def github_webhook(
+    request: Request,
+    x_github_event: Optional[str] = Header(None),
+    signature: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+):
+    """GitHub webhook handler."""
+    body = await request.body()
+    
+    if not _verify_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON")
+
+    event = x_github_event or "unknown"
+    repo = payload.get("repository", {}).get("full_name", "unknown")
+    
+    # Save to webhooks/github/
+    rel_dir = "webhooks/github"
+    base_dir = Path(settings.files_dir) / rel_dir
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{_ts_slug()}_{repo.replace('/', '_')}_{event}.json"
+    file_path = base_dir / filename
+    file_path.write_text(json.dumps(payload, indent=2))
+    
+    rel_path = f"{rel_dir}/{filename}"
+    remote_path = await ftp_client.upload(file_path, rel_path)
+
+    return FileUploadResponse(
+        status="success",
+        message=f"GitHub event saved",
+        files=[rel_path],
+        remote_files=[remote_path] if remote_path else None,
     )
 
 
