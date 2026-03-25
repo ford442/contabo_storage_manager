@@ -26,6 +26,7 @@ from .config import get_settings
 from .ftp_client import upload_bytes
 from .logger import get_logger
 from .models import FileUploadResponse, WebhookPayload, WebhookResponse
+from .ftp_client import ftp_client   # ← Add this import
 
 router = APIRouter(prefix="/webhook", tags=["webhooks"])
 files_router = APIRouter(prefix="/files", tags=["files"])
@@ -140,33 +141,36 @@ def _save_payload(
     return rel_path
 
 
-async def _save_upload(upload: UploadFile, rel_dir: str) -> str:
-    """Save an UploadFile into rel_dir, sync to FTP, return relative path.
-
-    The final filename is: <timestamp>_<safe-original-name>.<ext>
-    so that multiple uploads of the same file never collide.
+async def _save_upload(upload: UploadFile, rel_dir: str) -> dict:
     """
-    raw = await upload.read()
+    Save uploaded file locally + optionally upload to external FTP/SFTP.
+    Returns dict with local and remote paths.
+    """
+    base_dir = Path(settings.files_dir) / rel_dir
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    original = upload.filename or "file"
-    ext = Path(original).suffix.lower()
-    stem = _safe_name(Path(original).stem)
-    ts = _ts_slug()
-    filename = f"{ts}_{stem}{ext}"
-    rel_path = f"{rel_dir}/{filename}"
+    # Create safe filename
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in (upload.filename or "file"))
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    filename = f"{timestamp}_{safe_name}"
+    
+    local_path = base_dir / filename
 
-    files_dir = Path(settings.files_dir)
-    local_path = files_dir / rel_path
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_bytes(raw)
-    log.info("Saved upload → %s (%d bytes)", local_path, len(raw))
+    # Save locally
+    with open(local_path, "wb") as f:
+        content = await upload.read()
+        f.write(content)
 
-    try:
-        upload_bytes(raw, rel_path)
-    except Exception as exc:
-        log.warning("FTP upload failed (file still saved locally): %s", exc)
+    local_rel_path = f"{rel_dir}/{filename}"
 
-    return rel_path
+    # Upload to external FTP/SFTP if configured
+    remote_path = await ftp_client.upload(local_path, local_rel_path)
+
+    return {
+        "local_path": str(local_rel_path),
+        "remote_path": remote_path,
+        "size": local_path.stat().st_size
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
