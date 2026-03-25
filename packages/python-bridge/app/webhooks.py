@@ -1,11 +1,12 @@
 import hashlib
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -45,10 +46,12 @@ def _ts_slug() -> str:
 
 def _verify_signature(payload: bytes, signature_header: Optional[str]) -> bool:
     """Verify HMAC signature if WEBHOOK_SECRET is set."""
-    if not settings.webhook_secret or not signature_header:
-        return True  # Signature check disabled in dev
+    if not settings.webhook_secret:
+        return True  # Signature check disabled if no secret set
+    if not signature_header:
+        return False  # Secret is set but no signature provided
     try:
-        sig = signature_header.replace("sha256=", "")
+        sig = signature_header.replace("sha256=", "").replace("sha1=", "")
         computed = hmac.new(
             settings.webhook_secret.encode(), payload, hashlib.sha256
         ).hexdigest()
@@ -89,11 +92,19 @@ async def _save_upload(upload: UploadFile, rel_dir: str) -> dict:
 
 @webhook_router.post("/image-effects", response_model=FileUploadResponse)
 async def image_effects_webhook(
-    payload: dict,
-    signature: Optional[str] = None,   # X-Hub-Signature-256
+    request: Request,
+    signature: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
 ):
-    if not _verify_signature(str(payload).encode(), signature):
+    # Read raw body for signature verification (must match exact bytes sent)
+    body = await request.body()
+    
+    if not _verify_signature(body, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON")
 
     action = payload.get("action")
     name = payload.get("name", _ts_slug())
@@ -107,12 +118,12 @@ async def image_effects_webhook(
     else:
         rel_dir = "image-effects/misc"
 
-    # Save as JSON
+    # Save as proper JSON
     base_dir = Path(settings.files_dir) / rel_dir
     base_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{_ts_slug()}_{name.replace(' ', '_')}.json"
     file_path = base_dir / filename
-    file_path.write_text(str(payload))   # TODO: use json.dumps for proper formatting
+    file_path.write_text(json.dumps(payload, indent=2))
 
     return FileUploadResponse(
         status="success",
