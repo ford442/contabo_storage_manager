@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
-
+from typing import List, Optional
 
 class WebhookPayload(BaseModel):
     """Generic webhook payload accepted by every inbound endpoint."""
@@ -36,8 +36,11 @@ class SyncResponse(BaseModel):
 
 
 class FileUploadResponse(BaseModel):
-    """Response model for app-specific webhook endpoints that store files."""
-
     status: str
     message: str
-    files: list[str] = Field(default_factory=list, description="Relative paths of all saved files")
+    files: List[str]          # list of relative paths (local)
+    remote_files: Optional[List[str]] = None   # optional remote paths from SFTP
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
