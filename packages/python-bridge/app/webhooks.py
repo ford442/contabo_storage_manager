@@ -125,10 +125,15 @@ async def image_effects_webhook(
     file_path = base_dir / filename
     file_path.write_text(json.dumps(payload, indent=2))
 
+    # Upload to external storage
+    rel_path = f"{rel_dir}/{filename}"
+    remote_path = await ftp_client.upload(file_path, rel_path)
+
     return FileUploadResponse(
         status="success",
         message=f"Saved to {rel_dir}",
-        files=[f"{rel_dir}/{filename}"],
+        files=[rel_path],
+        remote_files=[remote_path] if remote_path else None,
     )
 
 
