@@ -9,8 +9,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..config import settings
-from ..models import FileUploadResponse
+from .config import settings
+from .models import FileUploadResponse
 from .ftp_client import ftp_client
 
 logger = logging.getLogger(__name__)
