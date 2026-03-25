@@ -1,63 +1,37 @@
-"""FastAPI application entry point."""
-
-from __future__ import annotations
-
-import asyncio
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 
-from .config import get_settings
-from .logger import get_logger
-from .sync import run_poll_loop
-from .webhooks import files_router, router as webhook_router
+from .config import settings
+from .webhooks import webhook_router, files_router
 
-settings = get_settings()
-log = get_logger("main")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    log.info("FTP Bridge (Python) starting up – env=%s", settings.app_env)
-    task = asyncio.create_task(run_poll_loop())
-    yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    log.info("FTP Bridge (Python) shut down")
-
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="FTP Bridge – Python",
-    description="FastAPI webhook receiver and FTP sync bridge.",
+    title="Contabo Storage Manager",
+    description="Webhook bridge + static file server for image-effects, flac_player, and web_sequencer",
     version="1.0.0",
-    lifespan=lifespan,
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-origins = settings.cors_origins_list
+# CORS (adjust as needed for your apps)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],   # Change to specific domains in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────────────
+# Include routers
 app.include_router(webhook_router)
-app.include_router(files_router)  # Static file server: GET /files/{path}
+app.include_router(files_router)   # ← New static files router
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "contabo-storage-manager"}
 
-# ── Health / root ─────────────────────────────────────────────────────────────
-@app.get("/health", tags=["ops"])
-async def health():
-    return {"status": "ok", "service": "python-bridge"}
-
-
-@app.get("/", tags=["ops"])
-async def root():
-    return {"message": "FTP Bridge – Python is running"}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
