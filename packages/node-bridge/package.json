@@ -1,0 +1,21 @@
+{
+  "name": "node-bridge",
+  "version": "1.0.0",
+  "description": "Express.js webhook receiver and FTP bridge for Contabo VPS",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "basic-ftp": "^5.0.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "winston": "^3.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
