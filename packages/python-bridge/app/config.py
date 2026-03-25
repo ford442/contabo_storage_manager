@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     python_port: int = 8000
     cors_origins: str = "*"
 
+    # Static file serving
+    static_base_url: str = "http://localhost:8000/files"
+    max_upload_mb: int = 512
+
     # Storage (local volume mount)
     files_dir: str = "/data/files"
 

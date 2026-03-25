@@ -49,6 +49,30 @@ services:
       retries: 3
       start_period: 10s
 
+  # ── Nginx static file server ─────────────────────────────────────────────────
+  # Serves /home/ftpbridge/files directly so apps can load audio/MIDI/images
+  # via HTTPS once you put a TLS-terminating proxy in front of port 8080.
+  nginx-files:
+    image: nginx:alpine
+    container_name: ftpbridge-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - ${FILES_DIR:-/home/ftpbridge/files}:/srv/files:ro
+      - ./config/nginx-files.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - ftpbridge
+    profiles:
+      - storage
+      - full
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
 networks:
   ftpbridge:
     driver: bridge

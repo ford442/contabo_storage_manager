@@ -17,6 +17,7 @@ Pick the one you prefer, or run both at the same time.
 - [Running without Docker (systemd)](#running-without-docker-systemd)
 - [Environment Variables](#environment-variables)
 - [Webhook Endpoints](#webhook-endpoints)
+- [Supported Apps](#supported-apps)
 - [Extending the Bridge](#extending-the-bridge)
 - [Scripts](#scripts)
 
@@ -25,19 +26,26 @@ Pick the one you prefer, or run both at the same time.
 ## Architecture
 
 ```
-Internet ──→ (nginx / direct)
+Internet ──→ (nginx / Caddy / direct)
                │
                ├─── :8000  Python Bridge (FastAPI)
                │             ├── POST /webhook/generic
                │             ├── POST /webhook/shopify
+               │             ├── POST /webhook/github
+               │             ├── POST /webhook/image-effects   ← image_video_effects
+               │             ├── POST /webhook/flac            ← flac_player
+               │             ├── POST /webhook/sequencer       ← web_sequencer
+               │             └── GET  /files/{path}            ← static file server
+               │
+               ├─── :3000  Node Bridge (Express)
+               │             ├── POST /webhook/generic
+               │             ├── POST /webhook/shopify
                │             └── POST /webhook/github
                │
-               └─── :3000  Node Bridge (Express)
-                             ├── POST /webhook/generic
-                             ├── POST /webhook/shopify
-                             └── POST /webhook/github
+               └─── :8080  Nginx static server (nginx-files container)
+                             └── GET /<any-path>               ← serves FILES_DIR directly
 
-Both bridges write to /home/ftpbridge/files  ←── vsftpd already serves this
+All services write to /home/ftpbridge/files  ←── single FTP account, vsftpd served
 ```
 
 ---
@@ -294,6 +302,218 @@ webhooks/
 └── shopify/
     └── shopify_orders_create_20240315T143022123456.json
 ```
+
+---
+
+---
+
+## Supported Apps
+
+Three web apps have dedicated webhook endpoints and organised storage layouts.
+All three share the **same single FTP account** configured in `.env`.
+
+### Storage layout
+
+```
+/home/ftpbridge/files/
+├── webhooks/                        # Generic / Shopify / GitHub payloads
+│
+├── image-effects/
+│   ├── shaders/                     # Shader JSON configs
+│   ├── metadata/                    # Effect metadata (name, category, tags …)
+│   └── outputs/
+│       └── YYYY-MM-DD/              # Generated images / videos / depth maps
+│
+├── audio/
+│   ├── flac/                        # FLAC audio files
+│   ├── wav/                         # WAV and AIFF audio files
+│   ├── covers/                      # Album / track cover art
+│   ├── playlists/                   # Playlist JSON
+│   └── metadata/                    # Track metadata JSON
+│
+└── sequencer/
+    ├── projects/                    # Full project JSON files
+    ├── midi/                        # MIDI files (.mid)
+    ├── samples/                     # Audio samples / SoundFonts
+    └── recordings/                  # Exported WAV / MP3 recordings
+```
+
+---
+
+### 1. image_video_effects
+
+[github.com/ford442/image_video_effects](https://github.com/ford442/image_video_effects)
+
+**Endpoint:** `POST /webhook/image-effects`
+**Content-Type:** `application/json`
+
+| `action` field | Stored at |
+|---|---|
+| `save_shader` | `image-effects/shaders/<name>.json` |
+| `save_metadata` | `image-effects/metadata/<name>.json` |
+| `save_output` | `image-effects/outputs/YYYY-MM-DD/<name>.json` |
+
+**Example — save a shader config:**
+
+```bash
+PAYLOAD='{"action":"save_shader","name":"chromatic-aberration","data":{"type":"fragment","uniforms":{"strength":0.8}}}'
+SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+
+curl -X POST https://VPS_IP:8000/webhook/image-effects \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -d "$PAYLOAD"
+```
+
+**Example — save output metadata:**
+
+```bash
+PAYLOAD='{"action":"save_output","name":"sunset-render","data":{"width":1920,"height":1080,"format":"webp"}}'
+SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+
+curl -X POST https://VPS_IP:8000/webhook/image-effects \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -d "$PAYLOAD"
+```
+
+**Configure in your app:**
+
+```js
+const STORAGE_URL = "https://VPS_IP:8000";
+await fetch(`${STORAGE_URL}/webhook/image-effects`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Hub-Signature-256": `sha256=${hmacSha256(secret, body)}`,
+  },
+  body: JSON.stringify({ action: "save_shader", name: shaderName, data: shaderObj }),
+});
+```
+
+---
+
+### 2. flac_player
+
+[github.com/ford442/flac_player](https://github.com/ford442/flac_player)
+
+**Endpoint:** `POST /webhook/flac`
+**Content-Type:** `multipart/form-data`
+
+| `action` field | File ext | Stored at |
+|---|---|---|
+| `upload_audio` | `.flac` | `audio/flac/` |
+| `upload_audio` | `.wav`, `.aiff` | `audio/wav/` |
+| `upload_cover` | any image | `audio/covers/` |
+| `save_playlist` | *(no file)* | `audio/playlists/` |
+| `save_metadata` | *(no file)* | `audio/metadata/` |
+
+**Example — upload a FLAC file:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/flac \
+  -H "X-Hub-Signature-256: sha256=$(cat track.flac | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')" \
+  -F "action=upload_audio" \
+  -F "file=@track.flac"
+```
+
+**Example — upload cover art:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/flac \
+  -F "action=upload_cover" \
+  -F "file=@cover.jpg"
+```
+
+**Load files directly in the player (static URL):**
+
+```js
+const STORAGE = "https://storage.yourdomain.com";   // nginx-files on :8080 behind TLS
+
+// Load a FLAC track
+const audio = new Audio(`${STORAGE}/audio/flac/20260325T120000_track.flac`);
+audio.play();
+
+// Or via the Python bridge /files endpoint
+const audio2 = new Audio(`https://VPS_IP:8000/files/audio/flac/20260325T120000_track.flac`);
+```
+
+---
+
+### 3. web_sequencer
+
+[github.com/ford442/web_sequencer](https://github.com/ford442/web_sequencer)
+
+**Endpoint:** `POST /webhook/sequencer`
+**Content-Type:** `application/json` **or** `multipart/form-data`
+
+| `action` | Content-Type | Stored at |
+|---|---|---|
+| `save_project` | `application/json` | `sequencer/projects/<name>.json` |
+| `upload_midi` | `multipart/form-data` | `sequencer/midi/` |
+| `upload_sample` | `multipart/form-data` | `sequencer/samples/` |
+| `upload_recording` | `multipart/form-data` | `sequencer/recordings/` |
+
+**Example — save a full project:**
+
+```bash
+PAYLOAD='{"action":"save_project","name":"my-track","data":{"bpm":120,"tracks":[]}}'
+SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+
+curl -X POST https://VPS_IP:8000/webhook/sequencer \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -d "$PAYLOAD"
+```
+
+**Example — upload a MIDI file:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/sequencer \
+  -F "action=upload_midi" \
+  -F "file=@bassline.mid"
+```
+
+**Example — upload an audio sample:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/sequencer \
+  -F "action=upload_sample" \
+  -F "file=@kick.wav"
+```
+
+**Example — upload an exported recording:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/sequencer \
+  -F "action=upload_recording" \
+  -F "file=@final-mix.mp3"
+```
+
+**Load project / MIDI back in the sequencer:**
+
+```js
+const STORAGE = "https://storage.yourdomain.com";
+
+// Load saved project JSON
+const res = await fetch(`${STORAGE}/sequencer/projects/20260325T120000_my-track.json`);
+const project = await res.json();
+
+// Load a MIDI file
+const midiRes = await fetch(`${STORAGE}/sequencer/midi/20260325T120000_bassline.mid`);
+const midiBuffer = await midiRes.arrayBuffer();
+```
+
+---
+
+### Static file access summary
+
+| Method | Base URL | Use case |
+|---|---|---|
+| Python bridge | `https://VPS_IP:8000/files/` | Webhook host also serves files |
+| Nginx container | `https://VPS_IP:8080/` (or behind TLS proxy) | Dedicated static server, better for large files / range requests |
+
+Set `STATIC_BASE_URL` in `.env` to the public HTTPS URL your apps should use.
 
 ---
 
