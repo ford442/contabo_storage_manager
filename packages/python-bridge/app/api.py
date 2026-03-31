@@ -17,6 +17,16 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 
 # ====================== Models ======================
 
+class ShaderParam(BaseModel):
+    """Shader parameter definition."""
+    name: str
+    label: Optional[str] = None
+    default: float = 0.5
+    min: float = 0.0
+    max: float = 1.0
+    step: Optional[float] = 0.01
+    description: Optional[str] = ""
+
 class ShaderMetadata(BaseModel):
     id: str
     name: str
@@ -32,11 +42,21 @@ class ShaderMetadata(BaseModel):
     format: str = "wgsl"
     converted: bool = False
     has_errors: bool = False
+    params: Optional[List[ShaderParam]] = None  # Shader parameters
 
 
 class ShaderRatingUpdate(BaseModel):
     rating: int = Field(..., ge=0, le=5, description="Rating 0-5 stars. 0 = has errors")
     notes: Optional[str] = None
+
+
+class MetaPatch(BaseModel):
+    """Partial update for shader metadata."""
+    name: Optional[str] = None
+    author: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    params: Optional[List[ShaderParam]] = None  # NEW: Support for shader params
 
 
 class ImageRecord(BaseModel):
@@ -49,346 +69,337 @@ class SongRecord(BaseModel):
     id: str
     title: str
     artist: str = ""
-    url: str
-    duration: Optional[int] = None
-    type: str = "audio"
+    url: str = ""
+    duration: int = 0
+    tags: List[str] = []
 
 
-# ====================== Helper Functions ======================
+class ShaderListResponse(BaseModel):
+    shaders: List[ShaderMetadata]
+    total: int
+    page: int = 1
+    per_page: int = 100
+
+
+# ====================== Helpers ======================
 
 def _get_shaders_dir() -> Path:
-    """Get the shaders directory."""
-    return Path(settings.files_dir) / "image-effects" / "shaders"
-
-def _get_metadata_dir() -> Path:
-    """Get the metadata directory."""
-    return Path(settings.files_dir) / "image-effects" / "metadata"
-
-def _get_ratings_file() -> Path:
-    """Get the ratings database file."""
-    metadata_dir = _get_metadata_dir()
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    return metadata_dir / "shader_ratings.json"
-
-def _load_ratings() -> dict:
-    """Load the ratings database."""
-    ratings_file = _get_ratings_file()
-    if ratings_file.exists():
-        try:
-            return json.loads(ratings_file.read_text())
-        except (json.JSONDecodeError, IOError):
-            return {}
-    return {}
-
-def _save_ratings(ratings: dict):
-    """Save the ratings database."""
-    ratings_file = _get_ratings_file()
-    ratings_file.write_text(json.dumps(ratings, indent=2))
+    """Get the shaders storage directory."""
+    base = Path(settings.files_dir)
+    shaders_dir = base / "shaders"
+    shaders_dir.mkdir(parents=True, exist_ok=True)
+    return shaders_dir
 
 
-# ====================== Shader API Endpoints ======================
-
-@api_router.get("/shaders", response_model=List[ShaderMetadata])
-async def list_shaders():
-    """List all available shaders with metadata and ratings."""
-    shaders_dir = _get_shaders_dir()
-    ratings = _load_ratings()
-    
-    shaders = []
-    if shaders_dir.exists():
-        for file_path in sorted(shaders_dir.glob("*.json")):
-            try:
-                data = json.loads(file_path.read_text())
-                shader_id = file_path.stem
-                
-                # Get rating from ratings database
-                rating_data = ratings.get(shader_id, {})
-                rating = rating_data.get("rating")
-                has_errors = rating == 0
-                
-                metadata = ShaderMetadata(
-                    id=shader_id,
-                    name=data.get("name", shader_id),
-                    author=data.get("author", ""),
-                    date=data.get("date", ""),
-                    description=data.get("description", ""),
-                    filename=file_path.name,
-                    tags=data.get("tags", []),
-                    rating=rating,
-                    source=data.get("source", "upload"),
-                    format=data.get("format", "wgsl"),
-                    has_errors=has_errors
-                )
-                shaders.append(metadata)
-            except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Failed to parse shader {file_path}: {e}")
-    
-    return shaders
-
-
-@api_router.get("/shaders/{shader_id}", response_model=dict)
-async def get_shader(shader_id: str):
-    """Get a shader by ID."""
-    shaders_dir = _get_shaders_dir()
-    
-    # Try different filename patterns
-    patterns = [
-        f"{shader_id}.json",
-        f"*{shader_id}*.json",
-    ]
-    
-    for pattern in patterns:
-        matches = list(shaders_dir.glob(pattern))
-        if matches:
-            try:
-                data = json.loads(matches[0].read_text())
-                return {
-                    "id": shader_id,
-                    "content": json.dumps(data),
-                    "type": data.get("format", "wgsl"),
-                    "data": data
-                }
-            except (json.JSONDecodeError, IOError) as e:
-                logger.error(f"Failed to read shader {shader_id}: {e}")
-                raise HTTPException(status_code=500, detail="Failed to read shader")
-    
-    raise HTTPException(status_code=404, detail="Shader not found")
-
-
-@api_router.post("/shaders")
-async def create_shader(shader_data: dict):
-    """Create or update a shader with metadata and WGSL code."""
-    shaders_dir = _get_shaders_dir()
-    metadata_dir = _get_metadata_dir()
-    
+def _load_shader_meta(shader_dir: Path) -> Optional[dict]:
+    """Load shader metadata from its meta.json file."""
+    meta_file = shader_dir / "meta.json"
+    if not meta_file.exists():
+        return None
     try:
-        # Extract data
-        shader_id = shader_data.get("id") or shader_data.get("name", "unknown")
-        name = shader_data.get("name", shader_id)
-        wgsl_code = shader_data.get("wgsl_code") or shader_data.get("code", "")
-        
-        # Sanitize filename
-        safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in shader_id)
-        filename = f"{safe_name}.json"
-        filepath = shaders_dir / filename
-        
-        # Build metadata
-        metadata = {
-            "id": shader_id,
-            "name": name,
-            "author": shader_data.get("author", ""),
-            "date": shader_data.get("date", datetime.now(timezone.utc).isoformat()),
-            "type": "shader",
-            "description": shader_data.get("description", ""),
-            "filename": filename,
-            "tags": shader_data.get("tags", []),
-            "format": shader_data.get("format", "wgsl"),
-            "source": shader_data.get("source", "upload"),
-            "coordinate": shader_data.get("coordinate"),
-            "category": shader_data.get("category", "image"),
-            "features": shader_data.get("features", []),
-        }
-        
-        # Save metadata JSON
-        filepath.write_text(json.dumps(metadata, indent=2))
-        
-        # Save WGSL code separately
-        if wgsl_code:
-            wgsl_path = shaders_dir / f"{safe_name}.wgsl"
-            wgsl_path.write_text(wgsl_code)
-        
-        logger.info(f"Created shader: {shader_id} at {filepath}")
-        
-        return {
-            "success": True,
-            "id": shader_id,
-            "filename": filename,
-            "message": f"Shader '{name}' created successfully",
-            "url": f"/files/image-effects/shaders/{filename}"
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to create shader: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create shader: {str(e)}")
+        with open(meta_file, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return None
+
+
+def _save_shader_meta(shader_dir: Path, meta: dict) -> None:
+    """Save shader metadata to its meta.json file."""
+    meta_file = shader_dir / "meta.json"
+    with open(meta_file, "w") as f:
+        json.dump(meta, f, indent=2)
+
+
+# ====================== Endpoints ======================
+
+@api_router.get("/shaders", response_model=ShaderListResponse)
+async def list_shaders(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=1000),
+    tag: Optional[str] = None,
+    rating: Optional[int] = None
+):
+    """List all shaders with pagination and optional filtering."""
+    shaders_dir = _get_shaders_dir()
+    shaders = []
+    
+    for shader_dir in sorted(shaders_dir.iterdir()):
+        if not shader_dir.is_dir():
+            continue
+        meta = _load_shader_meta(shader_dir)
+        if meta:
+            # Filter by tag if specified
+            if tag and tag not in meta.get("tags", []):
+                continue
+            # Filter by rating if specified
+            if rating is not None and meta.get("rating") != rating:
+                continue
+            shaders.append(meta)
+    
+    total = len(shaders)
+    start = (page - 1) * per_page
+    end = start + per_page
+    
+    return ShaderListResponse(
+        shaders=shaders[start:end],
+        total=total,
+        page=page,
+        per_page=per_page
+    )
+
+
+@api_router.get("/shaders/{shader_id}", response_model=ShaderMetadata)
+async def get_shader(shader_id: str):
+    """Get a single shader's metadata by ID."""
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
+    
+    if not shader_dir.exists():
+        raise HTTPException(status_code=404, detail="Shader not found")
+    
+    meta = _load_shader_meta(shader_dir)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Shader metadata not found")
+    
+    return ShaderMetadata(**meta)
+
+
+@api_router.post("/shaders", response_model=ShaderMetadata)
+async def create_shader(shader_data: dict):
+    """Create a new shader entry."""
+    shader_id = shader_data.get("id")
+    if not shader_id:
+        raise HTTPException(status_code=400, detail="Shader ID is required")
+    
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
+    shader_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set defaults
+    meta = {
+        "id": shader_id,
+        "name": shader_data.get("name", shader_id),
+        "author": shader_data.get("author", ""),
+        "date": datetime.now(timezone.utc).isoformat(),
+        "type": "shader",
+        "description": shader_data.get("description", ""),
+        "filename": f"{shader_id}.wgsl",
+        "tags": shader_data.get("tags", []),
+        "rating": shader_data.get("rating"),
+        "source": shader_data.get("source", "upload"),
+        "original_id": shader_data.get("original_id"),
+        "format": shader_data.get("format", "wgsl"),
+        "converted": shader_data.get("converted", False),
+        "has_errors": shader_data.get("has_errors", False),
+        "params": shader_data.get("params"),  # Save params if provided
+    }
+    
+    _save_shader_meta(shader_dir, meta)
+    
+    # Write shader code if provided
+    code = shader_data.get("code")
+    if code:
+        shader_file = shader_dir / f"{shader_id}.wgsl"
+        with open(shader_file, "w") as f:
+            f.write(code)
+    
+    return ShaderMetadata(**meta)
+
+
+@api_router.put("/shaders/{shader_id}", response_model=ShaderMetadata)
+async def update_shader(shader_id: str, payload: MetaPatch):
+    """Update shader metadata (including params)."""
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
+    
+    if not shader_dir.exists():
+        raise HTTPException(status_code=404, detail="Shader not found")
+    
+    meta = _load_shader_meta(shader_dir)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Shader metadata not found")
+    
+    # Update fields if provided
+    updated = {}
+    if payload.name is not None:
+        meta["name"] = payload.name
+        updated["name"] = payload.name
+    if payload.author is not None:
+        meta["author"] = payload.author
+        updated["author"] = payload.author
+    if payload.description is not None:
+        meta["description"] = payload.description
+        updated["description"] = payload.description
+    if payload.tags is not None:
+        meta["tags"] = payload.tags
+        updated["tags"] = f"{len(payload.tags)} tags"
+    # NEW: Handle params update
+    if payload.params is not None:
+        meta["params"] = [p.model_dump() for p in payload.params]
+        updated["params"] = f"{len(payload.params)} parameters"
+    
+    if updated:
+        meta["date"] = datetime.now(timezone.utc).isoformat()
+        _save_shader_meta(shader_dir, meta)
+        logger.info(f"Updated shader {shader_id}: {updated}")
+    
+    return ShaderMetadata(**meta)
 
 
 @api_router.post("/shaders/{shader_id}/rate")
 async def rate_shader(shader_id: str, rating_update: ShaderRatingUpdate):
-    """Rate a shader (0-5 stars). 0 stars marks the shader as having errors."""
-    ratings = _load_ratings()
+    """Rate a shader or mark it as having errors (rating=0)."""
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
     
-    ratings[shader_id] = {
-        "rating": rating_update.rating,
-        "notes": rating_update.notes,
-        "date": datetime.now(timezone.utc).isoformat()
-    }
+    if not shader_dir.exists():
+        raise HTTPException(status_code=404, detail="Shader not found")
     
-    _save_ratings(ratings)
+    meta = _load_shader_meta(shader_dir)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Shader metadata not found")
     
-    status = "errors" if rating_update.rating == 0 else "rated"
+    meta["rating"] = rating_update.rating
+    meta["has_errors"] = rating_update.rating == 0
+    if rating_update.notes:
+        meta["rating_notes"] = rating_update.notes
+    
+    _save_shader_meta(shader_dir, meta)
+    
     return {
-        "success": True,
-        "id": shader_id,
+        "shader_id": shader_id,
         "rating": rating_update.rating,
-        "status": status,
-        "message": f"Shader marked as {status}"
+        "has_errors": meta["has_errors"],
+        "message": "Rating updated successfully"
     }
 
 
 @api_router.get("/shaders/{shader_id}/rating")
 async def get_shader_rating(shader_id: str):
-    """Get the rating for a specific shader."""
-    ratings = _load_ratings()
-    rating_data = ratings.get(shader_id, {})
+    """Get a shader's current rating."""
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
     
-    if not rating_data:
-        raise HTTPException(status_code=404, detail="No rating found for this shader")
+    if not shader_dir.exists():
+        raise HTTPException(status_code=404, detail="Shader not found")
+    
+    meta = _load_shader_meta(shader_dir)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Shader metadata not found")
     
     return {
-        "id": shader_id,
-        "rating": rating_data.get("rating"),
-        "notes": rating_data.get("notes"),
-        "date": rating_data.get("date"),
-        "has_errors": rating_data.get("rating") == 0
+        "shader_id": shader_id,
+        "rating": meta.get("rating"),
+        "has_errors": meta.get("has_errors", False),
+        "notes": meta.get("rating_notes", "")
     }
 
 
-@api_router.get("/shaders/errors", response_model=List[ShaderMetadata])
+@api_router.get("/shaders-errors")
 async def list_shaders_with_errors():
-    """List all shaders marked with 0 stars (errors)."""
-    all_shaders = await list_shaders()
-    return [s for s in all_shaders if s.has_errors or s.rating == 0]
+    """List all shaders that have been marked with errors (rating=0)."""
+    shaders_dir = _get_shaders_dir()
+    error_shaders = []
+    
+    for shader_dir in shaders_dir.iterdir():
+        if not shader_dir.is_dir():
+            continue
+        meta = _load_shader_meta(shader_dir)
+        if meta and meta.get("has_errors"):
+            error_shaders.append({
+                "id": meta.get("id"),
+                "name": meta.get("name"),
+                "rating": meta.get("rating"),
+                "notes": meta.get("rating_notes", "")
+            })
+    
+    return {"shaders_with_errors": error_shaders, "total": len(error_shaders)}
 
 
-# ====================== Songs/Images API Endpoints ======================
+@api_router.get("/images")
+async def list_images():
+    """List all recorded images."""
+    base = Path(settings.files_dir)
+    images_file = base / "images.json"
+    
+    if not images_file.exists():
+        return {"images": []}
+    
+    with open(images_file, "r") as f:
+        return json.load(f)
+
+
+@api_router.post("/images")
+async def record_image(record: ImageRecord):
+    """Record a new image."""
+    base = Path(settings.files_dir)
+    images_file = base / "images.json"
+    
+    data = {"images": []}
+    if images_file.exists():
+        with open(images_file, "r") as f:
+            data = json.load(f)
+    
+    image_entry = {
+        "url": record.url,
+        "description": record.description,
+        "tags": record.tags,
+        "recorded_at": datetime.now(timezone.utc).isoformat()
+    }
+    data["images"].append(image_entry)
+    
+    with open(images_file, "w") as f:
+        json.dump(data, f, indent=2)
+    
+    return image_entry
+
 
 @api_router.get("/songs")
-async def list_songs(
-    type: Optional[str] = Query(None, description="Filter by type: audio, image, video")
-):
-    """List available media files (songs, images, videos)."""
-    results = []
+async def list_songs():
+    """List all recorded songs."""
+    base = Path(settings.files_dir)
+    songs_file = base / "songs.json"
     
-    # Images from outputs
-    if type is None or type == "image":
-        images_dir = Path(settings.files_dir) / "image-effects" / "outputs"
-        if images_dir.exists():
-            for date_dir in sorted(images_dir.iterdir()):
-                if date_dir.is_dir():
-                    for img_file in date_dir.glob("*"):
-                        if img_file.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
-                            results.append(ImageRecord(
-                                url=f"/files/image-effects/outputs/{date_dir.name}/{img_file.name}",
-                                description=f"Generated image from {date_dir.name}",
-                                tags=["generated", date_dir.name]
-                            ))
+    if not songs_file.exists():
+        return {"songs": []}
     
-    # Audio files
-    if type is None or type == "audio":
-        audio_dirs = [
-            Path(settings.files_dir) / "audio" / "flac",
-            Path(settings.files_dir) / "audio" / "wav",
-        ]
-        for audio_dir in audio_dirs:
-            if audio_dir.exists():
-                for audio_file in sorted(audio_dir.glob("*")):
-                    if audio_file.suffix.lower() in [".flac", ".wav", ".mp3", ".ogg"]:
-                        rel_path = f"audio/{audio_dir.name}/{audio_file.name}"
-                        results.append(SongRecord(
-                            id=audio_file.stem,
-                            title=audio_file.stem,
-                            url=f"/files/{rel_path}",
-                            type="audio"
-                        ))
+    with open(songs_file, "r") as f:
+        return json.load(f)
+
+
+@api_router.post("/songs")
+async def record_song(record: SongRecord):
+    """Record a new song."""
+    base = Path(settings.files_dir)
+    songs_file = base / "songs.json"
     
-    return results
+    data = {"songs": []}
+    if songs_file.exists():
+        with open(songs_file, "r") as f:
+            data = json.load(f)
+    
+    song_entry = {
+        "id": record.id,
+        "title": record.title,
+        "artist": record.artist,
+        "url": record.url,
+        "duration": record.duration,
+        "tags": record.tags,
+        "recorded_at": datetime.now(timezone.utc).isoformat()
+    }
+    data["songs"].append(song_entry)
+    
+    with open(songs_file, "w") as f:
+        json.dump(data, f, indent=2)
+    
+    return song_entry
 
 
-@api_router.get("/images", response_model=List[ImageRecord])
-async def list_images():
-    """List all available images."""
-    results = []
-    images_dir = Path(settings.files_dir) / "image-effects" / "outputs"
-    if images_dir.exists():
-        for date_dir in sorted(images_dir.iterdir()):
-            if date_dir.is_dir():
-                for img_file in date_dir.glob("*"):
-                    if img_file.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
-                        results.append(ImageRecord(
-                            url=f"/files/image-effects/outputs/{date_dir.name}/{img_file.name}",
-                            description=f"Generated image from {date_dir.name}",
-                            tags=["generated", date_dir.name]
-                        ))
-    return results
-
-
-@api_router.get("/audio", response_model=List[SongRecord])
-async def list_audio():
-    """List all available audio files."""
-    results = []
-    audio_dirs = [
-        Path(settings.files_dir) / "audio" / "flac",
-        Path(settings.files_dir) / "audio" / "wav",
-    ]
-    for audio_dir in audio_dirs:
-        if audio_dir.exists():
-            for audio_file in sorted(audio_dir.glob("*")):
-                if audio_file.suffix.lower() in [".flac", ".wav", ".mp3", ".ogg"]:
-                    rel_path = f"audio/{audio_dir.name}/{audio_file.name}"
-                    results.append(SongRecord(
-                        id=audio_file.stem,
-                        title=audio_file.stem,
-                        url=f"/files/{rel_path}",
-                        type="audio"
-                    ))
-    return results
-
-
-@api_router.get("/videos", response_model=List[dict])
-async def list_videos():
-    """List all available video files."""
-    results = []
-    videos_dir = Path(settings.files_dir) / "videos"
-    if videos_dir.exists():
-        for video_file in sorted(videos_dir.glob("*")):
-            if video_file.suffix.lower() in [".mp4", ".webm", ".mov", ".avi"]:
-                results.append({
-                    "id": video_file.stem,
-                    "title": video_file.stem,
-                    "url": f"/files/videos/{video_file.name}",
-                    "type": "video"
-                })
-    return results
-
-
-@api_router.get("/media")
-async def list_media(
-    type: Optional[str] = Query(None, description="Filter by type: audio, image, video, all")
-):
-    """List all available media files. More intuitive endpoint than /songs."""
-    if type == "image":
-        return {"images": await list_images(), "audio": [], "videos": []}
-    elif type == "audio":
-        return {"images": [], "audio": await list_audio(), "videos": []}
-    elif type == "video":
-        return {"images": [], "audio": [], "videos": await list_videos()}
-    else:
-        return {
-            "images": await list_images(),
-            "audio": await list_audio(),
-            "videos": await list_videos()
-        }
-
-
-# ====================== Renderer Status ======================
-
-@api_router.get("/renderer/status")
-async def renderer_status():
-    """Get renderer status and capabilities."""
+@api_router.get("/health")
+async def health_check():
+    """Health check endpoint."""
     return {
-        "backends": ["webgpu", "webgl2"],
-        "default": "webgpu",
-        "wasm_available": True,
-        "wasm_module_url": "/wasm/pixelocity_wasm.js",
-        "wasm_memory_required": 134217728  # 128MB
+        "status": "healthy",
+        "service": "storage-manager-api",
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
