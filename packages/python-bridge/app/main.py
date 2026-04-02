@@ -6,6 +6,7 @@ import logging
 from .config import settings
 from .webhooks import webhook_router, files_router
 from .api import api_router
+from .models_router import models_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -47,8 +48,9 @@ async def handle_options(path: str, request: Request):
 
 # Include routers
 app.include_router(webhook_router)
-app.include_router(files_router)   # ← Static files router
-app.include_router(api_router)     # ← API endpoints for shaders, images, ratings
+app.include_router(files_router)    # ← Static files router
+app.include_router(api_router)      # ← API endpoints for shaders, images, ratings
+app.include_router(models_router)   # ← Model serving with range header support
 
 @app.get("/health")
 async def health_check():

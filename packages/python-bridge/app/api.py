@@ -117,9 +117,10 @@ async def list_shaders(
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=1000),
     tag: Optional[str] = None,
-    rating: Optional[int] = None
+    rating: Optional[int] = None,
+    sort_by: str = Query("name", regex="^(name|date|rating)$")
 ):
-    """List all shaders with pagination and optional filtering."""
+    """List all shaders with pagination, filtering, and sorting."""
     shaders_dir = _get_shaders_dir()
     shaders = []
     
@@ -135,6 +136,15 @@ async def list_shaders(
             if rating is not None and meta.get("rating") != rating:
                 continue
             shaders.append(meta)
+    
+    # Sort shaders
+    reverse = sort_by in ("rating", "date")
+    if sort_by == "rating":
+        shaders.sort(key=lambda s: s.get("rating", 0) or 0, reverse=reverse)
+    elif sort_by == "date":
+        shaders.sort(key=lambda s: s.get("date", ""), reverse=reverse)
+    elif sort_by == "name":
+        shaders.sort(key=lambda s: s.get("name", "").lower())
     
     total = len(shaders)
     start = (page - 1) * per_page
@@ -293,6 +303,34 @@ async def get_shader_rating(shader_id: str):
         "has_errors": meta.get("has_errors", False),
         "notes": meta.get("rating_notes", "")
     }
+
+
+@api_router.get("/shaders/{shader_id}/code")
+async def get_shader_code(shader_id: str):
+    """Get a shader's WGSL source code."""
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / shader_id
+    
+    if not shader_dir.exists():
+        raise HTTPException(status_code=404, detail="Shader not found")
+    
+    # Try to read the .wgsl file
+    wgsl_file = shader_dir / f"{shader_id}.wgsl"
+    if not wgsl_file.exists():
+        # Try alternative names
+        for f in shader_dir.glob("*.wgsl"):
+            wgsl_file = f
+            break
+    
+    if not wgsl_file.exists():
+        raise HTTPException(status_code=404, detail="Shader code not found")
+    
+    try:
+        with open(wgsl_file, "r") as f:
+            code = f.read()
+        return {"id": shader_id, "code": code}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read shader: {str(e)}")
 
 
 @api_router.get("/shaders-errors")
