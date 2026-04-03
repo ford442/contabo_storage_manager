@@ -81,6 +81,29 @@ class ShaderListResponse(BaseModel):
     per_page: int = 100
 
 
+class MapConfig(BaseModel):
+    id: str
+    name: str
+    baseColor: str = "#00d9ff"
+    accentColor: str = "#ffffff"
+    scanlineIntensity: float = 0.25
+    pixelGridIntensity: float = 0.8
+    subpixelIntensity: float = 0.6
+    glowIntensity: float = 1.0
+    backgroundPattern: str = "hex"
+    animationSpeed: float = 0.5
+    musicTrackId: Optional[str] = None
+    shaderUrl: Optional[str] = None
+    adventureGoals: Optional[List[str]] = None
+    # Extra fields from map_config are allowed via model_config
+    model_config = {"extra": "allow"}
+
+
+class MapListResponse(BaseModel):
+    maps: List[MapConfig]
+    total: int
+
+
 # ====================== Helpers ======================
 
 def _get_shaders_dir() -> Path:
@@ -156,6 +179,57 @@ async def list_shaders(
         page=page,
         per_page=per_page
     )
+
+
+@api_router.get("/maps", response_model=MapListResponse)
+async def list_maps():
+    """List all LCD table maps derived from shaders tagged 'lcd-map'."""
+    shaders_dir = _get_shaders_dir()
+    maps = []
+    base_url = settings.static_base_url
+    
+    for shader_dir in sorted(shaders_dir.iterdir()):
+        if not shader_dir.is_dir():
+            continue
+        meta = _load_shader_meta(shader_dir)
+        if not meta:
+            continue
+        tags = meta.get("tags", [])
+        if "lcd-map" not in tags:
+            continue
+        
+        # Extract map config from params or top-level fields
+        params = meta.get("params", {})
+        if isinstance(params, list):
+            # Convert list of ShaderParam to dict
+            params = {p.get("name"): p.get("default") for p in params if isinstance(p, dict)}
+        elif params is None:
+            params = {}
+        
+        shader_id = meta.get("id", shader_dir.name)
+        # Merge top-level map_config dict if present
+        map_config_raw = meta.get("map_config", {})
+        if isinstance(map_config_raw, dict):
+            params = {**params, **map_config_raw}
+
+        map_config = MapConfig(
+            id=shader_id,
+            name=meta.get("name", shader_id),
+            baseColor=params.get("baseColor", params.get("base_color", "#00d9ff")),
+            accentColor=params.get("accentColor", params.get("accent_color", "#ffffff")),
+            scanlineIntensity=float(params.get("scanlineIntensity", params.get("scanline_intensity", 0.25))),
+            pixelGridIntensity=float(params.get("pixelGridIntensity", params.get("pixel_grid_intensity", 0.8))),
+            subpixelIntensity=float(params.get("subpixelIntensity", params.get("subpixel_intensity", 0.6))),
+            glowIntensity=float(params.get("glowIntensity", params.get("glow_intensity", 1.0))),
+            backgroundPattern=params.get("backgroundPattern", params.get("background_pattern", "hex")),
+            animationSpeed=float(params.get("animationSpeed", params.get("animation_speed", 0.5))),
+            musicTrackId=params.get("musicTrackId", params.get("music_track_id")),
+            shaderUrl=f"{base_url}/shaders/{shader_id}/code",
+            adventureGoals=params.get("adventureGoals", params.get("adventure_goals")),
+        )
+        maps.append(map_config)
+    
+    return MapListResponse(maps=maps, total=len(maps))
 
 
 @api_router.get("/shaders/{shader_id}", response_model=ShaderMetadata)
