@@ -9,6 +9,7 @@ from .api import api_router
 from .models_router import models_router
 from .audio_router import audio_router
 from .leaderboard_router import leaderboard_router
+from .adventure_router import adventure_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ app.include_router(api_router)          # ← API endpoints for shaders, images,
 app.include_router(models_router)       # ← Model serving with range header support
 app.include_router(audio_router)        # ← Audio endpoints for music and samples
 app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores
+app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 
 @app.get("/health")
 async def health_check():
