@@ -56,6 +56,104 @@ app.include_router(models_router)       # ← Model serving with range header su
 app.include_router(audio_router)        # ← Audio endpoints for music and samples
 app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores
 
+@app.get("/")
+async def home():
+    """Beautiful visual dashboard for the storage manager"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>storage.noahcohn.com</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+            body {
+                margin: 0;
+                font-family: 'Inter', system-ui, sans-serif;
+                background: #0a0a0a;
+                color: #eee;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .dashboard {
+                max-width: 960px;
+                padding: 40px;
+                text-align: center;
+            }
+            h1 {
+                font-size: 3.2rem;
+                margin: 0 0 8px;
+                background: linear-gradient(90deg, #00ddff, #ff00aa);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            .tagline { font-size: 1.3rem; color: #888; margin-bottom: 40px; }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 20px;
+                margin: 40px 0;
+            }
+            .stat-card {
+                background: #111;
+                padding: 24px;
+                border-radius: 16px;
+                border: 1px solid #222;
+            }
+            .stat-number { font-size: 2.4rem; font-weight: 600; color: #00ddff; }
+            .footer {
+                margin-top: 60px;
+                color: #555;
+                font-size: 0.95rem;
+            }
+            a { color: #00ddff; text-decoration: none; }
+        </style>
+    </head>
+    <body>
+        <div class="dashboard">
+            <h1>storage.noahcohn.com</h1>
+            <p class="tagline">Google Cloud Storage • FastAPI • Shader &amp; Media Manager</p>
+            
+            <div class="stats" id="stats">
+                <!-- Populated by JS from /api/health -->
+            </div>
+
+            <p>
+                <a href="/docs" style="margin-right: 30px;">📖 Swagger API Docs</a>
+                <a href="/api/shaders">🎨 Browse Shaders</a>
+            </p>
+
+            <div class="footer">
+                Powered by your Contabo VPS • 
+                <a href="https://github.com/ford442/contabo_storage_manager" target="_blank">GitHub</a>
+            </div>
+        </div>
+
+        <script>
+            fetch('/api/health')
+                .then(r => r.json())
+                .then(data => {
+                    const container = document.getElementById('stats');
+                    let html = '';
+                    for (const [key, val] of Object.entries(data.storage || {})) {
+                        if (val.count !== undefined) {
+                            html += `
+                                <div class="stat-card">
+                                    <div style="text-transform:uppercase; font-size:0.9rem; color:#666;">${key}</div>
+                                    <div class="stat-number">${val.count}</div>
+                                </div>`;
+                        }
+                    }
+                    container.innerHTML = html || '<p style="color:#666;">No storage stats available yet</p>';
+                });
+        </script>
+    </body>
+    </html>
+    """
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "contabo-storage-manager"}
