@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response, JSONResponse, HTMLResponse
 import logging
 
 from .config import settings
@@ -58,9 +58,9 @@ app.include_router(audio_router)        # ← Audio endpoints for music and samp
 app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores
 app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def home():
-    """Beautiful visual dashboard for the storage manager"""
+    """Beautiful visual dashboard for storage.noahcohn.com"""
     return """
     <!DOCTYPE html>
     <html lang="en">
