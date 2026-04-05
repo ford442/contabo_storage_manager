@@ -59,8 +59,7 @@ app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high sco
 app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 
 @app.get("/", response_class=HTMLResponse)
-async def home():
-    """Beautiful visual dashboard for storage.noahcohn.com"""
+async def media_gallery():
     return """
     <!DOCTYPE html>
     <html lang="en">
@@ -68,89 +67,108 @@ async def home():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>storage.noahcohn.com</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-            body {
-                margin: 0;
-                font-family: 'Inter', system-ui, sans-serif;
-                background: #0a0a0a;
-                color: #eee;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            .dashboard {
-                max-width: 960px;
-                padding: 40px;
-                text-align: center;
-            }
-            h1 {
-                font-size: 3.2rem;
-                margin: 0 0 8px;
-                background: linear-gradient(90deg, #00ddff, #ff00aa);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            .tagline { font-size: 1.3rem; color: #888; margin-bottom: 40px; }
-            .stats {
+            body { font-family: 'Inter', system-ui, sans-serif; }
+            .gallery-grid { 
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
                 gap: 20px;
-                margin: 40px 0;
             }
-            .stat-card {
-                background: #111;
-                padding: 24px;
-                border-radius: 16px;
-                border: 1px solid #222;
+            .media-card {
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             }
-            .stat-number { font-size: 2.4rem; font-weight: 600; color: #00ddff; }
-            .footer {
-                margin-top: 60px;
-                color: #555;
-                font-size: 0.95rem;
+            .media-card:hover {
+                transform: translateY(-4px);
+                box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
             }
-            a { color: #00ddff; text-decoration: none; }
         </style>
     </head>
-    <body>
-        <div class="dashboard">
-            <h1>storage.noahcohn.com</h1>
-            <p class="tagline">Google Cloud Storage • FastAPI • Shader &amp; Media Manager</p>
-            
-            <div class="stats" id="stats">
-                <!-- Populated by JS from /api/health -->
+    <body class="bg-[#0a0a0a] text-gray-200 min-h-screen">
+        <div class="max-w-7xl mx-auto p-8">
+            <!-- Header -->
+            <div class="flex justify-between items-center mb-10">
+                <div>
+                    <h1 class="text-4xl font-semibold bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent">
+                        storage.noahcohn.com
+                    </h1>
+                    <p class="text-gray-500">Google Cloud • Media &amp; Shader Vault</p>
+                </div>
+                <div class="flex gap-4">
+                    <button onclick="uploadFile()" 
+                            class="px-6 py-3 bg-white text-black rounded-2xl font-medium flex items-center gap-2 hover:bg-cyan-400 hover:text-black transition">
+                        <i class="fas fa-upload"></i> Upload
+                    </button>
+                </div>
             </div>
 
-            <p>
-                <a href="/docs" style="margin-right: 30px;">📖 Swagger API Docs</a>
-                <a href="/api/shaders">🎨 Browse Shaders</a>
-            </p>
+            <!-- Filters -->
+            <div class="flex gap-2 mb-8 flex-wrap" id="filters">
+                <!-- Populated by JS -->
+            </div>
 
-            <div class="footer">
-                Powered by your Contabo VPS • 
-                <a href="https://github.com/ford442/contabo_storage_manager" target="_blank">GitHub</a>
+            <!-- Search -->
+            <div class="relative mb-8">
+                <input type="text" id="search" 
+                       placeholder="Search files, shaders, videos..." 
+                       class="w-full bg-[#111] border border-gray-800 rounded-3xl px-6 py-4 pl-12 text-lg focus:outline-none focus:border-cyan-500"
+                       onkeyup="if(event.key==='Enter') filterGallery()">
+                <i class="fas fa-search absolute left-6 top-5 text-gray-500"></i>
+            </div>
+
+            <!-- Gallery Grid -->
+            <div class="gallery-grid" id="gallery">
+                <!-- Populated by JS from API -->
             </div>
         </div>
 
         <script>
-            fetch('/api/health')
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('stats');
-                    let html = '';
-                    for (const [key, val] of Object.entries(data.storage || {})) {
-                        if (val.count !== undefined) {
-                            html += `
-                                <div class="stat-card">
-                                    <div style="text-transform:uppercase; font-size:0.9rem; color:#666;">${key}</div>
-                                    <div class="stat-number">${val.count}</div>
-                                </div>`;
-                        }
-                    }
-                    container.innerHTML = html || '<p style="color:#666;">No storage stats available yet</p>';
-                });
+            async function loadGallery() {
+                const res = await fetch('/api/health');
+                const data = await res.json();
+                
+                // For now we show stats + placeholder cards
+                // You can later connect real /api/storage/files and /api/shaders endpoints
+                const gallery = document.getElementById('gallery');
+                gallery.innerHTML = `
+                    <div class="col-span-full text-center py-12 text-gray-500">
+                        <p class="text-xl">Media Gallery coming soon...</p>
+                        <p class="mt-2">We'll pull from /api/storage/files and /api/shaders automatically</p>
+                    </div>
+                `;
+                // TODO: Later expand this to fetch real media
+            }
+
+            // Simple filter chips
+            function createFilters() {
+                const filtersHTML = `
+                    <button onclick="setFilter('all')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition">All Media</button>
+                    <button onclick="setFilter('shader')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition flex items-center gap-2"><i class="fas fa-cube"></i> Shaders</button>
+                    <button onclick="setFilter('video')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition flex items-center gap-2"><i class="fas fa-video"></i> Videos</button>
+                    <button onclick="setFilter('audio')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition flex items-center gap-2"><i class="fas fa-music"></i> Audio</button>
+                    <button onclick="setFilter('image')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition flex items-center gap-2"><i class="fas fa-image"></i> Images</button>
+                    <button onclick="setFilter('note')" class="px-5 py-2 rounded-3xl bg-white/10 hover:bg-white/20 transition flex items-center gap-2"><i class="fas fa-note-sticky"></i> Notes</button>
+                `;
+                document.getElementById('filters').innerHTML = filtersHTML;
+            }
+
+            function setFilter(type) {
+                // Future filter logic
+                console.log('Filter:', type);
+                loadGallery();
+            }
+
+            function uploadFile() {
+                alert("Upload modal would go here (we can make a nice drag-and-drop modal next)");
+            }
+
+            // Init
+            window.onload = () => {
+                createFilters();
+                loadGallery();
+            };
         </script>
     </body>
     </html>
