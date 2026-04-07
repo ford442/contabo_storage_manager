@@ -229,6 +229,116 @@ def file_sender(file_path: Path):
             yield chunk
 
 
+# =============================================================================
+# TTS Model Endpoints (Supertonic)
+# =============================================================================
+
+def _get_tts_models_dir() -> Path:
+    """Get the TTS models storage directory."""
+    base = Path(settings.files_dir)
+    tts_dir = base / "models" / "tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    return tts_dir
+
+
+@models_router.get("/tts/list")
+async def list_tts_models():
+    """List all available TTS models (Supertonic format)."""
+    tts_dir = _get_tts_models_dir()
+    models = []
+    
+    # Look for model files
+    expected_files = [
+        "duration_predictor.onnx",
+        "text_encoder.onnx",
+        "vector_estimator.onnx",
+        "vocoder.onnx",
+        "tts.json",
+        "unicode_indexer.json",
+    ]
+    
+    # Check if main models exist
+    main_models_exist = all((tts_dir / f).exists() for f in expected_files[:4])
+    
+    model_info = {
+        "id": "supertonic",
+        "name": "Supertonic TTS",
+        "path": "/models/tts",
+        "files": [],
+        "voice_styles": [],
+        "is_complete": main_models_exist,
+    }
+    
+    # List model files
+    if tts_dir.exists():
+        for file in sorted(tts_dir.iterdir()):
+            if file.is_file():
+                model_info["files"].append({
+                    "name": file.name,
+                    "size": file.stat().st_size,
+                    "url": f"/models/tts/{file.name}",
+                })
+        
+        # List voice styles
+        voice_styles_dir = tts_dir / "voice_styles"
+        if voice_styles_dir.exists():
+            for style_file in sorted(voice_styles_dir.glob("*.json")):
+                model_info["voice_styles"].append({
+                    "name": style_file.stem,
+                    "file": style_file.name,
+                    "url": f"/models/tts/voice_styles/{style_file.name}",
+                })
+    
+    models.append(model_info)
+    
+    return {"models": models, "total": len(models)}
+
+
+@models_router.get("/tts/health")
+async def tts_health_check():
+    """Check if TTS models are available."""
+    tts_dir = _get_tts_models_dir()
+    
+    required_files = [
+        "duration_predictor.onnx",
+        "text_encoder.onnx",
+        "vector_estimator.onnx",
+        "vocoder.onnx",
+    ]
+    
+    config_files = [
+        "tts.json",
+        "unicode_indexer.json",
+    ]
+    
+    missing_models = [f for f in required_files if not (tts_dir / f).exists()]
+    missing_configs = [f for f in config_files if not (tts_dir / f).exists()]
+    
+    # Check voice styles
+    voice_styles_dir = tts_dir / "voice_styles"
+    voice_styles = []
+    if voice_styles_dir.exists():
+        voice_styles = [f.stem for f in voice_styles_dir.glob("*.json")]
+    
+    return {
+        "status": "healthy" if not missing_models else "incomplete",
+        "tts_dir": str(tts_dir),
+        "tts_dir_exists": tts_dir.exists(),
+        "required_models": {
+            "total": len(required_files),
+            "available": len(required_files) - len(missing_models),
+            "missing": missing_models,
+        },
+        "config_files": {
+            "total": len(config_files),
+            "available": len(config_files) - len(missing_configs),
+            "missing": missing_configs,
+        },
+        "voice_styles": voice_styles,
+        "is_ready": len(missing_models) == 0 and len(missing_configs) == 0,
+    }
+
+
 @models_router.head("/{model_id}/{file_path:path}")
 async def head_model_file(
     request: Request,
