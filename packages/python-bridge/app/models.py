@@ -44,3 +44,13 @@ class FileUploadResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+
+
+class StorageResult(BaseModel):
+    """Response wrapper for storage mutations (matches frontend)."""
+    success: bool = True
+    id: Optional[str] = None
+    url: Optional[str] = None
+    timestamp: Optional[str] = None
+    action: Optional[str] = None
+    error: Optional[str] = None
