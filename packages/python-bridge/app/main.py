@@ -11,6 +11,7 @@ from .audio_router import audio_router
 from .leaderboard_router import leaderboard_router
 from .adventure_router import adventure_router
 from .sequencer_router import sequencer_router
+from .vps_browser_router import vps_browser_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +60,7 @@ app.include_router(audio_router)        # ← Audio endpoints for music and samp
 app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores
 app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 app.include_router(sequencer_router)    # ← Sequencer endpoints for songs/patterns/banks/samples
+app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():
