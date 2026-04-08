@@ -8,7 +8,7 @@ from typing import List, Optional, Union
 
 import os
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Form
+from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -794,6 +794,96 @@ async def suggest_song_tags(song_id: str):
     suggestions = [s for s in suggestions if s not in existing]
     
     return {"suggestions": list(set(suggestions)), "source": "auto"}
+
+
+@api_router.post("/songs/upload")
+async def upload_song(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    author: str = Form("Unknown"),
+    genre: str = Form(""),
+    description: str = Form(""),
+    tags: str = Form(""),
+):
+    """Upload a music file (MP3, FLAC, WAV, OGG) and add it to the songs library.
+    
+    Args:
+        file: The audio file to upload
+        title: Song title
+        author: Artist name
+        genre: Music genre
+        description: Optional description
+        tags: Comma-separated list of tags
+    
+    Returns:
+        The created song metadata
+    """
+    # Validate file extension
+    filename = file.filename or ""
+    ext = Path(filename).suffix.lower()
+    allowed_exts = ['.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac']
+    
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid file type. Allowed: {', '.join(allowed_exts)}"
+        )
+    
+    # Generate unique ID and filename
+    song_id = str(uuid.uuid4())[:8]
+    safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_title = safe_title.replace(' ', '_') or "untitled"
+    storage_filename = f"{song_id}_{safe_title}{ext}"
+    
+    # Get the music directory
+    base = Path(settings.files_dir)
+    music_dir = base / "audio" / "music"
+    music_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Read and save file
+    content = await file.read()
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=413, 
+            detail=f"File exceeds {settings.max_upload_mb} MB limit"
+        )
+    
+    dest = music_dir / storage_filename
+    dest.write_bytes(content)
+    
+    # Parse tags
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    
+    # Create song entry
+    song = {
+        "id": song_id,
+        "name": f"{title}{ext}",
+        "title": title,
+        "author": author,
+        "genre": genre or None,
+        "rating": None,
+        "description": description or f"Uploaded on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+        "tags": tag_list,
+        "duration": None,  # Could extract from MP3 metadata
+        "play_count": 0,
+        "last_played": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "filename": storage_filename,
+        "url": f"/api/music/{song_id}",
+        "size": len(content)
+    }
+    
+    # Add to songs index
+    songs = _load_songs()
+    songs.append(song)
+    _save_songs(songs)
+    
+    return {
+        "success": True,
+        "song": song,
+        "message": f"Uploaded {filename} successfully"
+    }
 
 
 @api_router.get("/health")
