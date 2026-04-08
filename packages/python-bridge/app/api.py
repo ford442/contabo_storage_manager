@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query
+import os
+import uuid
+from fastapi import APIRouter, HTTPException, Query, Form
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
@@ -466,45 +469,331 @@ async def record_image(record: ImageRecord):
     return image_entry
 
 
-@api_router.get("/songs")
-async def list_songs():
-    """List all recorded songs."""
+# ====================== FLAC Player Song API ======================
+
+class SongMetadata(BaseModel):
+    """Song metadata model matching flac_player expectations."""
+    id: str
+    name: str
+    title: Optional[str] = None
+    author: Optional[str] = None
+    genre: Optional[str] = None
+    rating: Optional[int] = Field(None, ge=1, le=10)
+    description: Optional[str] = None
+    tags: List[str] = []
+    duration: Optional[int] = None
+    play_count: int = 0
+    last_played: Optional[str] = None
+    created_at: Optional[str] = None
+    url: Optional[str] = None
+    size: Optional[int] = None
+
+
+class SongStats(BaseModel):
+    total_tracks: int = 0
+    rated_4plus: int = 0
+    total_duration_hours: int = 0
+    total_play_count: int = 0
+    untagged_count: int = 0
+    trash_count: int = 0
+    unique_tags: int = 0
+    top_tags: List[dict] = []
+
+
+class SongPatch(BaseModel):
+    """Partial update for song metadata."""
+    name: Optional[str] = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    genre: Optional[str] = None
+    rating: Optional[int] = Field(None, ge=1, le=10)
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    last_played: Optional[str] = None
+    play_count: Optional[int] = None
+
+
+def _get_songs_file() -> Path:
+    """Get the songs JSON file path."""
     base = Path(settings.files_dir)
     songs_file = base / "songs.json"
-    
+    return songs_file
+
+
+def _load_songs() -> List[dict]:
+    """Load songs from JSON file."""
+    songs_file = _get_songs_file()
     if not songs_file.exists():
-        return {"songs": []}
-    
-    with open(songs_file, "r") as f:
-        return json.load(f)
-
-
-@api_router.post("/songs")
-async def record_song(record: SongRecord):
-    """Record a new song."""
-    base = Path(settings.files_dir)
-    songs_file = base / "songs.json"
-    
-    data = {"songs": []}
-    if songs_file.exists():
+        return []
+    try:
         with open(songs_file, "r") as f:
             data = json.load(f)
-    
-    song_entry = {
-        "id": record.id,
-        "title": record.title,
-        "artist": record.artist,
-        "url": record.url,
-        "duration": record.duration,
-        "tags": record.tags,
-        "recorded_at": datetime.now(timezone.utc).isoformat()
-    }
-    data["songs"].append(song_entry)
-    
+            return data.get("songs", []) if isinstance(data, dict) else data
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _save_songs(songs: List[dict]):
+    """Save songs to JSON file."""
+    songs_file = _get_songs_file()
+    songs_file.parent.mkdir(parents=True, exist_ok=True)
     with open(songs_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump({"songs": songs}, f, indent=2)
+
+
+@api_router.get("/songs", response_model=List[SongMetadata])
+async def list_songs(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    rating_gte: Optional[int] = Query(None, ge=1, le=10),
+    rating_lt: Optional[int] = Query(None, ge=1, le=10),
+    tags: Optional[str] = Query(None),
+    untagged: bool = Query(False),
+    search: Optional[str] = Query(None),
+    sort_by: str = Query("date"),
+    sort_desc: bool = Query(True),
+    exclude_id: Optional[str] = Query(None),
+):
+    """List all songs with filtering and sorting (flac_player compatible)."""
+    songs = _load_songs()
     
-    return song_entry
+    # Apply filters
+    if rating_gte is not None:
+        songs = [s for s in songs if (s.get("rating") or 0) >= rating_gte]
+    if rating_lt is not None:
+        songs = [s for s in songs if (s.get("rating") or 0) < rating_lt]
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",")]
+        songs = [s for s in songs if any(t in s.get("tags", []) for t in tag_list)]
+    if untagged:
+        songs = [s for s in songs if not s.get("tags")]
+    if search:
+        search_lower = search.lower()
+        songs = [s for s in songs if (
+            search_lower in s.get("name", "").lower() or
+            search_lower in s.get("title", "").lower() or
+            search_lower in s.get("author", "").lower()
+        )]
+    if exclude_id:
+        songs = [s for s in songs if s.get("id") != exclude_id]
+    
+    # Sort
+    reverse = sort_desc
+    if sort_by == "rating":
+        songs.sort(key=lambda s: s.get("rating", 0) or 0, reverse=reverse)
+    elif sort_by == "name":
+        songs.sort(key=lambda s: s.get("name", "").lower(), reverse=reverse)
+    elif sort_by == "play_count":
+        songs.sort(key=lambda s: s.get("play_count", 0), reverse=reverse)
+    elif sort_by == "last_played":
+        songs.sort(key=lambda s: s.get("last_played", ""), reverse=reverse)
+    elif sort_by == "random":
+        import random
+        random.shuffle(songs)
+    else:  # date
+        songs.sort(key=lambda s: s.get("created_at", s.get("date", "")), reverse=reverse)
+    
+    # Add URLs if missing
+    base_url = str(settings.static_base_url).rstrip("/")
+    for song in songs:
+        if not song.get("url") and song.get("filename"):
+            song["url"] = f"{base_url}/audio/music/{song['filename']}"
+    
+    # Apply pagination
+    total = len(songs)
+    songs = songs[offset:offset + limit]
+    
+    return songs
+
+
+@api_router.get("/songs/stats", response_model=SongStats)
+async def get_songs_stats():
+    """Get library statistics for flac_player."""
+    songs = _load_songs()
+    
+    if not songs:
+        return SongStats()
+    
+    # Calculate stats
+    total_duration = sum(s.get("duration", 0) or 0 for s in songs)
+    total_play_count = sum(s.get("play_count", 0) or 0 for s in songs)
+    
+    # Count unique tags
+    all_tags = {}
+    untagged = 0
+    for song in songs:
+        song_tags = song.get("tags", [])
+        if not song_tags:
+            untagged += 1
+        for tag in song_tags:
+            all_tags[tag] = all_tags.get(tag, 0) + 1
+    
+    top_tags = [{"name": k, "count": v} for k, v in sorted(all_tags.items(), key=lambda x: -x[1])[:20]]
+    
+    return SongStats(
+        total_tracks=len(songs),
+        rated_4plus=sum(1 for s in songs if (s.get("rating") or 0) >= 4),
+        total_duration_hours=total_duration // 3600,
+        total_play_count=total_play_count,
+        untagged_count=untagged,
+        trash_count=0,
+        unique_tags=len(all_tags),
+        top_tags=top_tags
+    )
+
+
+@api_router.get("/songs/tags")
+async def get_songs_tags():
+    """Get all tags with counts for flac_player."""
+    songs = _load_songs()
+    
+    tag_counts = {}
+    for song in songs:
+        for tag in song.get("tags", []):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    
+    tags = [{"name": k, "count": v} for k, v in sorted(tag_counts.items(), key=lambda x: -x[1])]
+    return {"tags": tags}
+
+
+@api_router.get("/songs/{song_id}", response_model=SongMetadata)
+async def get_song(song_id: str):
+    """Get a single song by ID."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    # Add URL if missing
+    if not song.get("url") and song.get("filename"):
+        base_url = str(settings.static_base_url).rstrip("/")
+        song["url"] = f"{base_url}/audio/music/{song['filename']}"
+    
+    return song
+
+
+@api_router.post("/songs/{song_id}/play")
+async def record_song_play(song_id: str):
+    """Record that a song was played."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    song["play_count"] = (song.get("play_count", 0) or 0) + 1
+    song["last_played"] = datetime.now(timezone.utc).isoformat()
+    
+    _save_songs(songs)
+    return {"success": True, "play_count": song["play_count"]}
+
+
+@api_router.patch("/songs/{song_id}")
+async def patch_song(song_id: str, patch: SongPatch):
+    """Partially update song metadata."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    # Apply updates
+    updates = patch.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        if value is not None:
+            song[field] = value
+    
+    _save_songs(songs)
+    return {"success": True, "song": song}
+
+
+@api_router.post("/songs/{song_id}/trash")
+async def trash_song(song_id: str):
+    """Mark a song as trashed."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    song["trashed"] = True
+    song["trashed_at"] = datetime.now(timezone.utc).isoformat()
+    
+    _save_songs(songs)
+    return {"success": True}
+
+
+@api_router.get("/music/{song_id}")
+async def stream_music_file(song_id: str):
+    """Stream a music file by song ID."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    # Get the audio directory
+    base = Path(settings.files_dir)
+    audio_dir = base / "audio" / "music"
+    
+    # Try to find the file by filename or song_id
+    filename = song.get("filename")
+    if filename:
+        file_path = audio_dir / filename
+        if file_path.exists():
+            return FileResponse(
+                file_path,
+                media_type="audio/mpeg",
+                headers={"Accept-Ranges": "bytes"}
+            )
+    
+    # Try common extensions
+    for ext in [".mp3", ".flac", ".wav", ".ogg"]:
+        file_path = audio_dir / f"{song_id}{ext}"
+        if file_path.exists():
+            media_type = "audio/mpeg"
+            if ext == ".flac":
+                media_type = "audio/flac"
+            elif ext == ".wav":
+                media_type = "audio/wav"
+            elif ext == ".ogg":
+                media_type = "audio/ogg"
+            
+            return FileResponse(
+                file_path,
+                media_type=media_type,
+                headers={"Accept-Ranges": "bytes"}
+            )
+    
+    raise HTTPException(status_code=404, detail="Audio file not found")
+
+
+@api_router.get("/songs/{song_id}/suggest-tags")
+async def suggest_song_tags(song_id: str):
+    """Suggest tags for a song based on its metadata (simple implementation)."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    # Simple suggestion logic based on genre and existing tags
+    suggestions = []
+    
+    if song.get("genre"):
+        suggestions.append(song["genre"].lower())
+    
+    # Common music tags based on name/title
+    name = (song.get("name") or song.get("title") or "").lower()
+    if any(word in name for word in ["electronic", "synth", "techno", "edm"]):
+        suggestions.extend(["electronic", "synth"])
+    if any(word in name for word in ["rock", "guitar", "band"]):
+        suggestions.extend(["rock", "guitar"])
+    if any(word in name for word in ["ambient", "chill", "relax", "sleep"]):
+        suggestions.extend(["ambient", "chill"])
+    if any(word in name for word in ["upbeat", "fast", "dance", "party"]):
+        suggestions.extend(["upbeat", "dance"])
+    
+    # Remove duplicates and already existing tags
+    existing = set(t.lower() for t in song.get("tags", []))
+    suggestions = [s for s in suggestions if s not in existing]
+    
+    return {"suggestions": list(set(suggestions)), "source": "auto"}
 
 
 @api_router.get("/health")
