@@ -1,0 +1,86 @@
+{
+  "version": "1.0",
+  "updated": "2026-04-10T05:00:00Z",
+  "tracks": [
+    {
+      "id": "neon-helix",
+      "name": "Neon Helix",
+      "title": "Neon Helix",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/neon-helix.mp3",
+      "duration": 180,
+      "map_id": "neon-helix",
+      "tags": ["electronic", "synthwave", "title"]
+    },
+    {
+      "id": "cyber-core",
+      "name": "Cyber Core",
+      "title": "Cyber Core",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/cyber-core.mp3",
+      "duration": 200,
+      "map_id": "cyber-core",
+      "tags": ["electronic", "cyberpunk"]
+    },
+    {
+      "id": "quantum-grid",
+      "name": "Quantum Grid",
+      "title": "Quantum Grid",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/quantum-grid.mp3",
+      "duration": 190,
+      "map_id": "quantum-grid",
+      "tags": ["electronic", "ambient"]
+    },
+    {
+      "id": "singularity-well",
+      "name": "Singularity Well",
+      "title": "Singularity Well",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/singularity-well.mp3",
+      "duration": 220,
+      "map_id": "singularity-well",
+      "tags": ["electronic", "dark", "intense"]
+    },
+    {
+      "id": "glitch-spire",
+      "name": "Glitch Spire",
+      "title": "Glitch Spire",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/glitch-spire.mp3",
+      "duration": 210,
+      "map_id": "glitch-spire",
+      "tags": ["electronic", "glitch", "experimental"]
+    },
+    {
+      "id": "matrix-core",
+      "name": "Matrix Core",
+      "title": "Matrix Core",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/matrix-core.mp3",
+      "duration": 195,
+      "map_id": "matrix-core",
+      "tags": ["electronic", "techno"]
+    },
+    {
+      "id": "cyan-void",
+      "name": "Cyan Void",
+      "title": "Cyan Void",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/cyan-void.mp3",
+      "duration": 185,
+      "map_id": "cyan-void",
+      "tags": ["electronic", "chill"]
+    },
+    {
+      "id": "magenta-dream",
+      "name": "Magenta Dream",
+      "title": "Magenta Dream",
+      "artist": "Pachinball",
+      "url": "/pachinball/music/magenta-dream.mp3",
+      "duration": 205,
+      "map_id": "magenta-dream",
+      "tags": ["electronic", "dreamy"]
+    }
+  ]
+}

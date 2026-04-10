@@ -13,6 +13,7 @@ from .adventure_router import adventure_router
 from .sequencer_router import sequencer_router
 from .vps_browser_router import vps_browser_router
 from .notes_router import notes_router
+from .pachinball_router import pachinball_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,7 @@ app.include_router(adventure_router)    # ← Adventure mode endpoints for level
 app.include_router(sequencer_router)    # ← Sequencer endpoints for songs/patterns/banks/samples
 app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 app.include_router(notes_router)        # ← Named notes endpoints
+app.include_router(pachinball_router)   # ← Pachinball game content endpoints (maps, music, backbox)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():

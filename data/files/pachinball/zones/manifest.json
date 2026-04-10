@@ -1,0 +1,168 @@
+{
+  "version": "1.0",
+  "updated": "2026-04-10T05:00:00Z",
+  "zones": [
+    {
+      "zoneId": "neon-helix",
+      "name": "Neon Helix",
+      "videoUrl": "/pachinball/zones/neon_helix_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/neon_helix_thumb.png"
+    },
+    {
+      "zoneId": "cyber-core",
+      "name": "Cyber Core",
+      "videoUrl": "/pachinball/zones/cyber_core_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/cyber_core_thumb.png"
+    },
+    {
+      "zoneId": "quantum-grid",
+      "name": "Quantum Grid",
+      "videoUrl": "/pachinball/zones/quantum_grid_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/quantum_grid_thumb.png"
+    },
+    {
+      "zoneId": "singularity-well",
+      "name": "Singularity Well",
+      "videoUrl": "/pachinball/zones/singularity_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/singularity_thumb.png"
+    },
+    {
+      "zoneId": "glitch-spire",
+      "name": "Glitch Spire",
+      "videoUrl": "/pachinball/zones/glitch_spire_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/glitch_spire_thumb.png"
+    },
+    {
+      "zoneId": "retro-wave-hills",
+      "name": "Retro Wave Hills",
+      "videoUrl": "/pachinball/zones/retrowave_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/retrowave_thumb.png"
+    },
+    {
+      "zoneId": "chrono-core",
+      "name": "Chrono Core",
+      "videoUrl": "/pachinball/zones/chrono_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/chrono_thumb.png"
+    },
+    {
+      "zoneId": "hyper-drift",
+      "name": "Hyper Drift",
+      "videoUrl": "/pachinball/zones/hyper_drift_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/hyper_drift_thumb.png"
+    },
+    {
+      "zoneId": "pachinko-spire",
+      "name": "Pachinko Spire",
+      "videoUrl": "/pachinball/zones/pachinko_spire_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/pachinko_spire_thumb.png"
+    },
+    {
+      "zoneId": "orbital-junkyard",
+      "name": "Orbital Junkyard",
+      "videoUrl": "/pachinball/zones/junkyard_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/junkyard_thumb.png"
+    },
+    {
+      "zoneId": "firewall-breach",
+      "name": "Firewall Breach",
+      "videoUrl": "/pachinball/zones/firewall_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/firewall_thumb.png"
+    },
+    {
+      "zoneId": "cpu-core",
+      "name": "CPU Core",
+      "videoUrl": "/pachinball/zones/cpu_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/cpu_thumb.png"
+    },
+    {
+      "zoneId": "cryo-chamber",
+      "name": "Cryo Chamber",
+      "videoUrl": "/pachinball/zones/cryo_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/cryo_thumb.png"
+    },
+    {
+      "zoneId": "bio-hazard-lab",
+      "name": "Bio Hazard Lab",
+      "videoUrl": "/pachinball/zones/biohazard_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/biohazard_thumb.png"
+    },
+    {
+      "zoneId": "gravity-forge",
+      "name": "Gravity Forge",
+      "videoUrl": "/pachinball/zones/forge_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/forge_thumb.png"
+    },
+    {
+      "zoneId": "tidal-nexus",
+      "name": "Tidal Nexus",
+      "videoUrl": "/pachinball/zones/tidal_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/tidal_thumb.png"
+    },
+    {
+      "zoneId": "digital-zen-garden",
+      "name": "Digital Zen Garden",
+      "videoUrl": "/pachinball/zones/zen_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/zen_thumb.png"
+    },
+    {
+      "zoneId": "synthwave-surf",
+      "name": "Synthwave Surf",
+      "videoUrl": "/pachinball/zones/surf_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/surf_thumb.png"
+    },
+    {
+      "zoneId": "solar-flare",
+      "name": "Solar Flare",
+      "videoUrl": "/pachinball/zones/solar_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/solar_thumb.png"
+    },
+    {
+      "zoneId": "prism-pathway",
+      "name": "Prism Pathway",
+      "videoUrl": "/pachinball/zones/prism_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/prism_thumb.png"
+    },
+    {
+      "zoneId": "magnetic-storage",
+      "name": "Magnetic Storage",
+      "videoUrl": "/pachinball/zones/magnetic_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/magnetic_thumb.png"
+    },
+    {
+      "zoneId": "neural-network",
+      "name": "Neural Network",
+      "videoUrl": "/pachinball/zones/neural_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/neural_thumb.png"
+    },
+    {
+      "zoneId": "neon-stronghold",
+      "name": "Neon Stronghold",
+      "videoUrl": "/pachinball/zones/stronghold_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/stronghold_thumb.png"
+    },
+    {
+      "zoneId": "casino-heist",
+      "name": "Casino Heist",
+      "videoUrl": "/pachinball/zones/casino_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/casino_thumb.png"
+    },
+    {
+      "zoneId": "tesla-tower",
+      "name": "Tesla Tower",
+      "videoUrl": "/pachinball/zones/tesla_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/tesla_thumb.png"
+    },
+    {
+      "zoneId": "neon-skyline",
+      "name": "Neon Skyline",
+      "videoUrl": "/pachinball/zones/skyline_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/skyline_thumb.png"
+    },
+    {
+      "zoneId": "polychrome-void",
+      "name": "Polychrome Void",
+      "videoUrl": "/pachinball/zones/polychrome_intro.mp4",
+      "thumbnailUrl": "/pachinball/zones/polychrome_thumb.png"
+    }
+  ]
+}

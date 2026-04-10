@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "updated": "2026-04-10T05:00:00Z",
+  "media": [
+    {
+      "id": "attract-video",
+      "type": "video",
+      "url": "/pachinball/backbox/attract.mp4",
+      "state": "attract",
+      "fallback": "/pachinball/backbox/attract.png"
+    },
+    {
+      "id": "attract-image",
+      "type": "image",
+      "url": "/pachinball/backbox/attract.png",
+      "state": "attract"
+    },
+    {
+      "id": "jackpot-video",
+      "type": "video",
+      "url": "/pachinball/backbox/jackpot.mp4",
+      "state": "jackpot",
+      "fallback": "/pachinball/backbox/jackpot.png"
+    },
+    {
+      "id": "jackpot-image",
+      "type": "image",
+      "url": "/pachinball/backbox/jackpot.png",
+      "state": "jackpot"
+    },
+    {
+      "id": "fever-video",
+      "type": "video",
+      "url": "/pachinball/backbox/fever.mp4",
+      "state": "fever",
+      "fallback": "/pachinball/backbox/fever.png"
+    },
+    {
+      "id": "fever-image",
+      "type": "image",
+      "url": "/pachinball/backbox/fever.png",
+      "state": "fever"
+    },
+    {
+      "id": "reach-video",
+      "type": "video",
+      "url": "/pachinball/backbox/reach.mp4",
+      "state": "reach",
+      "fallback": "/pachinball/backbox/reach.png"
+    },
+    {
+      "id": "reach-image",
+      "type": "image",
+      "url": "/pachinball/backbox/reach.png",
+      "state": "reach"
+    },
+    {
+      "id": "adventure-video",
+      "type": "video",
+      "url": "/pachinball/backbox/adventure.mp4",
+      "state": "adventure",
+      "fallback": "/pachinball/backbox/adventure.png"
+    },
+    {
+      "id": "adventure-image",
+      "type": "image",
+      "url": "/pachinball/backbox/adventure.png",
+      "state": "adventure"
+    }
+  ]
+}
