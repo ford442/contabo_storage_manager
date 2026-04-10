@@ -58,13 +58,13 @@ app.include_router(webhook_router)
 app.include_router(files_router)        # ← Static files router
 app.include_router(api_router)          # ← API endpoints for shaders, images, ratings
 app.include_router(models_router)       # ← Model serving with range header support
-app.include_router(audio_router)        # ← Audio endpoints for music and samples
-app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores
+app.include_router(audio_router, prefix="/api")        # ← Audio endpoints for music and samples
+app.include_router(leaderboard_router, prefix="/api")  # ← Leaderboard endpoints for high scores
 app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 app.include_router(sequencer_router)    # ← Sequencer endpoints for songs/patterns/banks/samples
 app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 app.include_router(notes_router)        # ← Named notes endpoints
-app.include_router(pachinball_router)   # ← Pachinball game content endpoints (maps, music, backbox)
+app.include_router(pachinball_router, prefix="/api")   # ← Pachinball game content endpoints (maps, music, backbox)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():
@@ -185,6 +185,23 @@ async def media_gallery():
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "contabo-storage-manager"}
+
+
+# Redirect routes for backwards compatibility (game calls these without /api prefix)
+@app.get("/music")
+async def music_redirect(request: Request):
+    """Redirect /music to /api/music for backwards compatibility."""
+    from fastapi.responses import RedirectResponse
+    query = request.query_params
+    return RedirectResponse(url=f"/api/music?{query}", status_code=307)
+
+
+@app.get("/leaderboard")
+async def leaderboard_redirect(request: Request):
+    """Redirect /leaderboard to /api/leaderboard for backwards compatibility."""
+    from fastapi.responses import RedirectResponse
+    query = request.query_params
+    return RedirectResponse(url=f"/api/leaderboard?{query}", status_code=307)
 
 # Global CORS response handler - ensures all responses have CORS headers
 @app.middleware("http")

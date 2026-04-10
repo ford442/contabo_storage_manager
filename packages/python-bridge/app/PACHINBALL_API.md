@@ -111,7 +111,7 @@ DELETE /music/{track_id}
 
 ### Get Manifest
 ```http
-GET /pachinball/backbox
+GET /backbox
 ```
 
 ### Upload Backbox File
@@ -128,7 +128,7 @@ file_type: video|image
 
 ### Get Manifest
 ```http
-GET /pachinball/zones
+GET /zones
 ```
 
 ### Upload Zone Video
@@ -145,14 +145,14 @@ zone_name: Neon Helix
 
 ### Serve Any File
 ```http
-GET /pachinball/files/{path}
+GET /files/{path}
 ```
-Example: `/pachinball/files/music/neon-helix.mp3`
+Example: `/api/files/pachinball/music/neon-helix.mp3`
 
 ## Health Check
 
 ```http
-GET /pachinball/health
+GET /health
 ```
 
 ## Storage Layout on VPS
@@ -177,8 +177,8 @@ GET /pachinball/health
 ## Admin Workflow
 
 1. **Add a new map**: POST to `/maps` with map config
-2. **Upload music**: POST to `/pachinball/upload/music` with MP3
-3. **Upload backbox video**: POST to `/pachinball/upload/backbox` 
-4. **Upload zone video**: POST to `/pachinball/upload/zone`
+2. **Upload music**: POST to `/upload/music` with MP3
+3. **Upload backbox video**: POST to `/upload/backbox` 
+4. **Upload zone video**: POST to `/upload/zone`
 
 All changes are persisted to JSON files on disk - no repo changes needed.

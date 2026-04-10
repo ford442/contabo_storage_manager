@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from .config import settings
 
 logger = logging.getLogger(__name__)
-pachinball_router = APIRouter(prefix="/api", tags=["pachinball"])
+pachinball_router = APIRouter(tags=["pachinball"])
 
 
 # ====================== Models ======================
@@ -524,7 +524,7 @@ async def delete_pachinball_track(track_id: str):
     return {"status": "deleted", "id": track_id}
 
 
-@pachinball_router.get("/pachinball/backbox", response_model=BackboxManifestResponse)
+@pachinball_router.get("/backbox", response_model=BackboxManifestResponse)
 async def get_backbox_manifest():
     """Get backbox media manifest for attract mode and state videos.
     
@@ -570,7 +570,7 @@ async def get_backbox_manifest():
     return BackboxManifestResponse(media=media)
 
 
-@pachinball_router.get("/pachinball/zones", response_model=ZoneManifestResponse)
+@pachinball_router.get("/zones", response_model=ZoneManifestResponse)
 async def get_zones_manifest():
     """Get zone intro video manifest for adventure mode.
     
@@ -619,7 +619,7 @@ async def get_zones_manifest():
     return ZoneManifestResponse(zones=zones)
 
 
-@pachinball_router.get("/pachinball/health")
+@pachinball_router.get("/health")
 async def pachinball_health_check():
     """Health check for Pachinball content endpoints."""
     pachinball_dir = _get_pachinball_dir()
@@ -649,7 +649,7 @@ async def pachinball_health_check():
 
 # ====================== File Upload Endpoints ======================
 
-@pachinball_router.post("/pachinball/upload/music")
+@pachinball_router.post("/upload/music")
 async def upload_music_file(
     file: UploadFile = File(...),
     track_id: str = Form(...),
@@ -734,7 +734,7 @@ async def upload_music_file(
     }
 
 
-@pachinball_router.post("/pachinball/upload/backbox")
+@pachinball_router.post("/upload/backbox")
 async def upload_backbox_file(
     file: UploadFile = File(...),
     state: str = Form(...),  # attract, jackpot, fever, reach, adventure
@@ -801,7 +801,7 @@ async def upload_backbox_file(
     }
 
 
-@pachinball_router.post("/pachinball/upload/zone")
+@pachinball_router.post("/upload/zone")
 async def upload_zone_video(
     file: UploadFile = File(...),
     zone_id: str = Form(...),
@@ -886,7 +886,7 @@ async def upload_zone_video(
     }
 
 
-@pachinball_router.get("/pachinball/files/{file_path:path}")
+@pachinball_router.get("/files/{file_path:path}")
 async def serve_pachinball_file(file_path: str):
     """Serve a static file from the pachinball storage directory."""
     pachinball_dir = _get_pachinball_dir()
