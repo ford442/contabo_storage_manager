@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     webhook_secret: Optional[str] = None
 
     # Static file serving
-    static_base_url: str = "http://localhost:8000/files"
+    static_base_url: str = "https://storage.noahcohn.com/files"
     max_upload_mb: int = 512
 
     # Logging

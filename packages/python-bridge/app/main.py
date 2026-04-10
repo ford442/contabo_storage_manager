@@ -58,13 +58,13 @@ app.include_router(webhook_router)
 app.include_router(files_router)        # ← Static files router
 app.include_router(api_router)          # ← API endpoints for shaders, images, ratings
 app.include_router(models_router)       # ← Model serving with range header support
-app.include_router(audio_router, prefix="/api")        # ← Audio endpoints for music and samples
-app.include_router(leaderboard_router, prefix="/api")  # ← Leaderboard endpoints for high scores
+app.include_router(audio_router)        # ← Audio endpoints for music and samples (router already has /api prefix)
+app.include_router(leaderboard_router)  # ← Leaderboard endpoints for high scores (router already has /api prefix)
 app.include_router(adventure_router)    # ← Adventure mode endpoints for level progress
 app.include_router(sequencer_router)    # ← Sequencer endpoints for songs/patterns/banks/samples
 app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 app.include_router(notes_router)        # ← Named notes endpoints
-app.include_router(pachinball_router, prefix="/api")   # ← Pachinball game content endpoints (maps, music, backbox)
+app.include_router(pachinball_router)   # ← Pachinball game content endpoints (router already has /api prefix)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():
