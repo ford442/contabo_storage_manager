@@ -216,6 +216,92 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Vary"] = "Origin"
     return response
 
+# === SSH-POWERED ADMIN PANEL (add this whole block) ===
+import asyncssh
+import asyncio
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.templating import Jinja2Templates
+import uuid
+from typing import Dict
+
+# ── CONFIG: SSH from storage VPS → code.noahcohn.com ──
+SSH_HOST = os.environ.get("BUILD_VPS_HOST", "code.noahcohn.com")
+SSH_USER = os.environ.get("BUILD_VPS_USER", "your-username")   # ← change if needed
+SSH_KEY_PATH = os.environ.get("BUILD_VPS_SSH_KEY", "/root/.ssh/id_ed25519")
+
+active_tasks: Dict[str, dict] = {}
+
+# Templates folder will be inside packages/python-bridge/app/templates
+templates = Jinja2Templates(directory="templates")
+
+# Whitelisted commands that run on code.noahcohn.com
+ALLOWED_COMMANDS = {
+    "git-pull": "cd ~/ford442/contabo_storage_manager && git pull",
+    "npm-install": "cd ~/ford442/contabo_storage_manager && npm i",
+    "npm-build": "cd ~/ford442/contabo_storage_manager && npm run build",
+    "restart-service": "cd ~/ford442/contabo_storage_manager && docker compose --profile python restart",
+    "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",   # note: port is now 8000
+    "sync-music": "curl -X POST http://localhost:8000/api/admin/sync-music",
+    # add any other commands you want
+}
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_panel(request: Request):
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+@app.post("/api/admin/run")
+async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):
+    if command_key not in ALLOWED_COMMANDS:
+        raise HTTPException(400, "Command not allowed")
+    
+    task_id = str(uuid.uuid4())
+    cmd = ALLOWED_COMMANDS[command_key]
+    
+    async def execute_via_ssh():
+        active_tasks[task_id] = {"output": [], "status": "running", "cmd": cmd}
+        try:
+            async with asyncssh.connect(
+                SSH_HOST,
+                username=SSH_USER,
+                client_keys=[SSH_KEY_PATH],
+                known_hosts=None
+            ) as conn:
+                result = await conn.run(cmd, check=False)
+                
+                for line in (result.stdout or "").splitlines():
+                    active_tasks[task_id]["output"].append(line)
+                for line in (result.stderr or "").splitlines():
+                    active_tasks[task_id]["output"].append(f"ERROR: {line}")
+                
+                active_tasks[task_id]["status"] = "success" if result.exit_status == 0 else "failed"
+                active_tasks[task_id]["exit_code"] = result.exit_status
+        except Exception as e:
+            active_tasks[task_id]["output"].append(f"SSH ERROR: {str(e)}")
+            active_tasks[task_id]["status"] = "failed"
+    
+    background_tasks.add_task(execute_via_ssh)
+    return {"task_id": task_id, "command": cmd}
+
+@app.get("/api/admin/logs/{task_id}")
+async def stream_remote_logs(task_id: str):
+    async def event_generator():
+        last_index = 0
+        while True:
+            if task_id not in active_tasks:
+                yield "data: [Task not found]\n\n"
+                break
+            task = active_tasks[task_id]
+            for line in task["output"][last_index:]:
+                yield f"data: {line}\n\n"
+            last_index = len(task["output"])
+            
+            if task["status"] != "running":
+                yield f"data: --- FINISHED (exit code {task.get('exit_code', 'unknown')}) ---\n\n"
+                break
+            await asyncio.sleep(0.3)
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
