@@ -267,10 +267,10 @@ async def admin_panel(request: Request):
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
           <button onclick="runCommand('git-pull')" 
                   class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
-          <button onclick="runCommand('npm-build')" 
-                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
           <button onclick="runCommand('npm-install')" 
-                  class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">npm run build</button>
+                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">NPM Install</button>
+          <button onclick="runCommand('npm-build')" 
+                  class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">NPM Run Build</button>
           <button onclick="runCommand('restart-service')" 
                   class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg font-medium">Restart Service</button>
           <button onclick="runCommand('sync-indexes')" 
