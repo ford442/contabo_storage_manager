@@ -11,6 +11,7 @@ services:
       - "${PYTHON_PORT:-8000}:8000"
     volumes:
       - ${FILES_DIR:-/home/ftpbridge/files}:/data/files
+      - /root/.ssh:/root/.ssh:ro
       - ./logs/python:/var/log/ftpbridge
     networks:
       - ftpbridge
