@@ -229,22 +229,12 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Vary"] = "Origin"
     return response
 
-
 # ── CONFIG ──
 SSH_HOST = os.environ.get("BUILD_VPS_HOST", "code.noahcohn.com")
 SSH_USER = os.environ.get("BUILD_VPS_USER", "root")
 SSH_KEY_PATH = os.environ.get("BUILD_VPS_SSH_KEY", "/root/.ssh/id_ed25519")
 
 active_tasks: Dict[str, dict] = {}
-
-# Whitelisted commands
-ALLOWED_COMMANDS = {
-    "git-pull": "cd ~/contabo_storage_manager && git pull origin main",
-    "npm-build": "cd ~/contabo_storage_manager && npm run build",
-    "restart-service": "cd ~/contabo_storage_manager && docker compose --profile python restart",
-    "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",
-    "sync-music": "curl -X POST http://localhost:8000/api/admin/sync-music",
-}
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
@@ -253,39 +243,72 @@ async def admin_panel(request: Request):
     <html>
     <head>
       <meta charset="utf-8">
-      <title>1ink Admin Panel</title>
+      <title>1ink Control Panel</title>
       <script src="https://cdn.tailwindcss.com"></script>
-      <script src="https://unpkg.com/htmx.org@2"></script>
-      <style>body { font-family: system-ui; } .log { font-family: monospace; line-height: 1.4; }</style>
+      <style>
+        body { font-family: system-ui; }
+        .log { font-family: monospace; line-height: 1.5; white-space: pre-wrap; }
+      </style>
     </head>
     <body class="bg-zinc-950 text-white p-8">
       <div class="max-w-5xl mx-auto">
         <h1 class="text-4xl font-bold mb-8">🚀 1ink Control Panel</h1>
         
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
-          <button hx-post="/api/admin/run?command_key=git-pull" 
-                  hx-target="#log-window" 
-                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg">Git Pull</button>
-          <button hx-post="/api/admin/run?command_key=npm-build" 
-                  hx-target="#log-window" 
-                  class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg">npm run build</button>
-          <button hx-post="/api/admin/run?command_key=restart-service" 
-                  hx-target="#log-window" 
-                  class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg">Restart Service</button>
-          <button hx-post="/api/admin/run?command_key=sync-indexes" 
-                  hx-target="#log-window" 
-                  class="bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-xl text-lg">Sync Indexes</button>
+          <button onclick="runCommand('git-pull')" 
+                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
+          <button onclick="runCommand('npm-build')" 
+                  class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">npm run build</button>
+          <button onclick="runCommand('restart-service')" 
+                  class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg font-medium">Restart Service</button>
+          <button onclick="runCommand('sync-indexes')" 
+                  class="bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-xl text-lg font-medium">Sync Indexes</button>
+        </div>
+
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="text-xl font-semibold">Live Output</h2>
+          <button onclick="clearLog()" 
+                  class="text-sm px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg">Clear Log</button>
         </div>
 
         <div id="log-window" class="bg-black border border-zinc-800 rounded-2xl p-6 h-96 overflow-auto text-emerald-400 log">
-          Click any button above — live output will appear here...
+          Click any button above — live logs will stream here in real time...
         </div>
       </div>
+
+      <script>
+        async function runCommand(key) {
+          const logWindow = document.getElementById('log-window');
+          logWindow.innerHTML += `<div class="text-amber-400">[Starting ${key}]</div>`;
+
+          const res = await fetch(`/api/admin/run?command_key=${key}`, { method: 'POST' });
+          const data = await res.json();
+
+          logWindow.innerHTML += `<div class="text-blue-400">Task started → ${data.task_id}</div>`;
+
+          // Start live streaming logs
+          const eventSource = new EventSource(`/api/admin/logs/${data.task_id}`);
+          eventSource.onmessage = function(e) {
+            if (e.data.includes("FINISHED")) {
+              logWindow.innerHTML += `<div class="text-violet-400">${e.data}</div>`;
+              eventSource.close();
+            } else {
+              logWindow.innerHTML += `<div>${e.data}</div>`;
+            }
+            logWindow.scrollTop = logWindow.scrollHeight;
+          };
+        }
+
+        function clearLog() {
+          document.getElementById('log-window').innerHTML = '';
+        }
+      </script>
     </body>
     </html>
     """
     return HTMLResponse(html)
 
+# (The rest of the endpoints stay exactly the same: run_remote_command and stream_remote_logs)
 @app.post("/api/admin/run")
 async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):
     if command_key not in ALLOWED_COMMANDS:
@@ -333,6 +356,7 @@ async def stream_remote_logs(task_id: str):
             await asyncio.sleep(0.3)
     
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
