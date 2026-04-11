@@ -19,6 +19,15 @@ from .vps_browser_router import vps_browser_router
 from .notes_router import notes_router
 from .pachinball_router import pachinball_router
 
+
+# === SSH-POWERED ADMIN PANEL (SIMPLE VERSION - NO TEMPLATES) ===
+import asyncssh
+import asyncio
+import uuid
+from typing import Dict
+
+
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -220,38 +229,62 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Vary"] = "Origin"
     return response
 
-# === SSH-POWERED ADMIN PANEL (add this whole block) ===
-import asyncssh
-import asyncio
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
-import uuid
-from typing import Dict
 
-# ── CONFIG: SSH from storage VPS → code.noahcohn.com ──
+# ── CONFIG ──
 SSH_HOST = os.environ.get("BUILD_VPS_HOST", "code.noahcohn.com")
-SSH_USER = os.environ.get("BUILD_VPS_USER", "your-username")   # ← change if needed
+SSH_USER = os.environ.get("BUILD_VPS_USER", "root")
 SSH_KEY_PATH = os.environ.get("BUILD_VPS_SSH_KEY", "/root/.ssh/id_ed25519")
 
 active_tasks: Dict[str, dict] = {}
 
-# Templates folder will be inside packages/python-bridge/app/templates
-templates = Jinja2Templates(directory="templates")
-
-# Whitelisted commands that run on code.noahcohn.com
+# Whitelisted commands
 ALLOWED_COMMANDS = {
-    "git-pull": "cd ~/ford442/contabo_storage_manager && git pull",
-    "npm-install": "cd ~/ford442/contabo_storage_manager && npm i",
-    "npm-build": "cd ~/ford442/contabo_storage_manager && npm run build",
-    "restart-service": "cd ~/ford442/contabo_storage_manager && docker compose --profile python restart",
-    "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",   # note: port is now 8000
+    "git-pull": "cd ~/contabo_storage_manager && git pull origin main",
+    "npm-build": "cd ~/contabo_storage_manager && npm run build",
+    "restart-service": "cd ~/contabo_storage_manager && docker compose --profile python restart",
+    "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",
     "sync-music": "curl -X POST http://localhost:8000/api/admin/sync-music",
-    # add any other commands you want
 }
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
-    return templates.TemplateResponse("admin.html", {"request": request})
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>1ink Admin Panel</title>
+      <script src="https://cdn.tailwindcss.com"></script>
+      <script src="https://unpkg.com/htmx.org@2"></script>
+      <style>body { font-family: system-ui; } .log { font-family: monospace; line-height: 1.4; }</style>
+    </head>
+    <body class="bg-zinc-950 text-white p-8">
+      <div class="max-w-5xl mx-auto">
+        <h1 class="text-4xl font-bold mb-8">🚀 1ink Control Panel</h1>
+        
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
+          <button hx-post="/api/admin/run?command_key=git-pull" 
+                  hx-target="#log-window" 
+                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg">Git Pull</button>
+          <button hx-post="/api/admin/run?command_key=npm-build" 
+                  hx-target="#log-window" 
+                  class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg">npm run build</button>
+          <button hx-post="/api/admin/run?command_key=restart-service" 
+                  hx-target="#log-window" 
+                  class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg">Restart Service</button>
+          <button hx-post="/api/admin/run?command_key=sync-indexes" 
+                  hx-target="#log-window" 
+                  class="bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-xl text-lg">Sync Indexes</button>
+        </div>
+
+        <div id="log-window" class="bg-black border border-zinc-800 rounded-2xl p-6 h-96 overflow-auto text-emerald-400 log">
+          Click any button above — live output will appear here...
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
 
 @app.post("/api/admin/run")
 async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):
@@ -265,18 +298,13 @@ async def run_remote_command(command_key: str, background_tasks: BackgroundTasks
         active_tasks[task_id] = {"output": [], "status": "running", "cmd": cmd}
         try:
             async with asyncssh.connect(
-                SSH_HOST,
-                username=SSH_USER,
-                client_keys=[SSH_KEY_PATH],
-                known_hosts=None
+                SSH_HOST, username=SSH_USER, client_keys=[SSH_KEY_PATH], known_hosts=None
             ) as conn:
                 result = await conn.run(cmd, check=False)
-                
                 for line in (result.stdout or "").splitlines():
                     active_tasks[task_id]["output"].append(line)
                 for line in (result.stderr or "").splitlines():
                     active_tasks[task_id]["output"].append(f"ERROR: {line}")
-                
                 active_tasks[task_id]["status"] = "success" if result.exit_status == 0 else "failed"
                 active_tasks[task_id]["exit_code"] = result.exit_status
         except Exception as e:
@@ -305,7 +333,6 @@ async def stream_remote_logs(task_id: str):
             await asyncio.sleep(0.3)
     
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
