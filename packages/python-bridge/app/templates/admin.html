@@ -16,7 +16,9 @@
               hx-target="#log-window" 
               class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">Build Frontend (npm run build)</button>
       <button hx-post="/api/admin/run?command_key=git-pull" 
-              class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull Latest</button>
+              class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">Build Frontend (npm run build)</button>
+      <button hx-post="/api/admin/run?command_key=npm-install" 
+              class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">NPM Install</button>
       <button hx-post="/api/admin/run?command_key=restart-uvicorn" 
               class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg font-medium">Restart Storage Manager</button>
       <button hx-post="/api/admin/run?command_key=sync-indexes" 
