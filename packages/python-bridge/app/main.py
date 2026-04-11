@@ -239,6 +239,7 @@ active_tasks: Dict[str, dict] = {}
 # Whitelisted commands (runs on code.noahcohn.com)
 ALLOWED_COMMANDS = {
     "git-pull": "cd ~/contabo_storage_manager && git pull origin main",
+    "npm-install": "cd ~/contabo_storage_manager && npm i",
     "npm-build": "cd ~/contabo_storage_manager && npm run build",
     "restart-service": "cd ~/contabo_storage_manager && docker compose --profile python restart",
     "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",
@@ -267,6 +268,8 @@ async def admin_panel(request: Request):
           <button onclick="runCommand('git-pull')" 
                   class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
           <button onclick="runCommand('npm-build')" 
+                  class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
+          <button onclick="runCommand('npm-install')" 
                   class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">npm run build</button>
           <button onclick="runCommand('restart-service')" 
                   class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg font-medium">Restart Service</button>
