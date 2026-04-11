@@ -236,6 +236,15 @@ SSH_KEY_PATH = os.environ.get("BUILD_VPS_SSH_KEY", "/root/.ssh/id_ed25519")
 
 active_tasks: Dict[str, dict] = {}
 
+# Whitelisted commands (runs on code.noahcohn.com)
+ALLOWED_COMMANDS = {
+    "git-pull": "cd ~/contabo_storage_manager && git pull origin main",
+    "npm-build": "cd ~/contabo_storage_manager && npm run build",
+    "restart-service": "cd ~/contabo_storage_manager && docker compose --profile python restart",
+    "sync-indexes": "curl -X POST http://localhost:8000/api/admin/sync",
+    "sync-music": "curl -X POST http://localhost:8000/api/admin/sync-music",
+}
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
     html = """
@@ -272,31 +281,38 @@ async def admin_panel(request: Request):
         </div>
 
         <div id="log-window" class="bg-black border border-zinc-800 rounded-2xl p-6 h-96 overflow-auto text-emerald-400 log">
-          Click any button above — live logs will stream here in real time...
+          Click any button above — live logs will stream here...
         </div>
       </div>
 
       <script>
         async function runCommand(key) {
           const logWindow = document.getElementById('log-window');
-          logWindow.innerHTML += `<div class="text-amber-400">[Starting ${key}]</div>`;
+          logWindow.innerHTML += `<div class="text-amber-400">[Starting ${key}...]</div>`;
 
-          const res = await fetch(`/api/admin/run?command_key=${key}`, { method: 'POST' });
-          const data = await res.json();
-
-          logWindow.innerHTML += `<div class="text-blue-400">Task started → ${data.task_id}</div>`;
-
-          // Start live streaming logs
-          const eventSource = new EventSource(`/api/admin/logs/${data.task_id}`);
-          eventSource.onmessage = function(e) {
-            if (e.data.includes("FINISHED")) {
-              logWindow.innerHTML += `<div class="text-violet-400">${e.data}</div>`;
-              eventSource.close();
-            } else {
-              logWindow.innerHTML += `<div>${e.data}</div>`;
+          try {
+            const res = await fetch(`/api/admin/run?command_key=${key}`, { method: 'POST' });
+            if (!res.ok) {
+              const text = await res.text();
+              logWindow.innerHTML += `<div class="text-red-400">ERROR ${res.status}: ${text}</div>`;
+              return;
             }
-            logWindow.scrollTop = logWindow.scrollHeight;
-          };
+            const data = await res.json();
+            logWindow.innerHTML += `<div class="text-blue-400">Task started → ${data.task_id}</div>`;
+
+            const eventSource = new EventSource(`/api/admin/logs/${data.task_id}`);
+            eventSource.onmessage = function(e) {
+              if (e.data.includes("FINISHED")) {
+                logWindow.innerHTML += `<div class="text-violet-400">${e.data}</div>`;
+                eventSource.close();
+              } else {
+                logWindow.innerHTML += `<div>${e.data}</div>`;
+              }
+              logWindow.scrollTop = logWindow.scrollHeight;
+            };
+          } catch (err) {
+            logWindow.innerHTML += `<div class="text-red-400">Failed to start command: ${err}</div>`;
+          }
         }
 
         function clearLog() {
@@ -308,11 +324,10 @@ async def admin_panel(request: Request):
     """
     return HTMLResponse(html)
 
-# (The rest of the endpoints stay exactly the same: run_remote_command and stream_remote_logs)
 @app.post("/api/admin/run")
 async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):
     if command_key not in ALLOWED_COMMANDS:
-        raise HTTPException(400, "Command not allowed")
+        raise HTTPException(400, f"Command '{command_key}' not allowed")
     
     task_id = str(uuid.uuid4())
     cmd = ALLOWED_COMMANDS[command_key]
