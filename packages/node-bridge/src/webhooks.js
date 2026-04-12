@@ -28,16 +28,38 @@ function verifySignature(rawBody, signatureHeader, res) {
     return false;
   }
 
-  const provided = signatureHeader.split("=").pop();
+  // Parse signature: "sha256=<hex>" or "sha1=<hex>"
+  const match = signatureHeader.match(/^(sha256|sha1)=([a-f0-9]+)$/i);
+  if (!match) {
+    res.status(401).json({ error: "Invalid signature format" });
+    return false;
+  }
+
+  const provided = match[2].toLowerCase();
   const expected = crypto
     .createHmac(WEBHOOK_HMAC_ALGO, WEBHOOK_SECRET)
     .update(rawBody)
     .digest("hex");
 
-  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided))) {
+  // timingSafeEqual requires equal-length buffers
+  if (provided.length !== expected.length) {
     res.status(401).json({ error: "Invalid webhook signature" });
     return false;
   }
+
+  try {
+    const providedBuf = Buffer.from(provided, "hex");
+    const expectedBuf = Buffer.from(expected, "hex");
+    
+    if (!crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+      res.status(401).json({ error: "Invalid webhook signature" });
+      return false;
+    }
+  } catch (err) {
+    res.status(401).json({ error: "Invalid webhook signature" });
+    return false;
+  }
+  
   return true;
 }
 
