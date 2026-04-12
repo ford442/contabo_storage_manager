@@ -85,22 +85,61 @@ def load_local_shader_params() -> Dict[str, List[Dict[str, Any]]]:
             with open(json_file, "r") as f:
                 shader_list = json.load(f)
             
+            if not isinstance(shader_list, list):
+                print(f"Warning: {json_file} is not a list, skipping")
+                continue
+                
             for shader_data in shader_list:
+                if not isinstance(shader_data, dict):
+                    continue
                 shader_id = shader_data.get("id")
-                if shader_id and "params" in shader_data:
-                    # Convert to API format
+                if not shader_id:
+                    continue
+                    
+                raw_params = shader_data.get("params")
+                if not raw_params:
+                    continue
+                    
+                # Handle params as dict (convert to list)
+                if isinstance(raw_params, dict):
+                    param_list = []
+                    for key, val in raw_params.items():
+                        if isinstance(val, dict):
+                            param_list.append({
+                                "id": key,
+                                "name": val.get("name", val.get("label", key)),
+                                "default": val.get("default", 0.5),
+                                "min": val.get("min", 0.0),
+                                "max": val.get("max", 1.0),
+                                "step": val.get("step", 0.01),
+                                "description": val.get("description", ""),
+                            })
+                        else:
+                            # Simple value, create a basic param
+                            param_list.append({
+                                "id": key,
+                                "name": key,
+                                "default": val if isinstance(val, (int, float)) else 0.5,
+                            })
+                    raw_params = param_list
+                
+                # Now process as list
+                if isinstance(raw_params, list):
                     api_params = []
-                    for p in shader_data["params"]:
-                        api_params.append({
-                            "name": p.get("id", f"param{len(api_params)+1}"),
-                            "label": p.get("name", p.get("label", f"Parameter {len(api_params)+1}")),
-                            "default": p.get("default", 0.5),
-                            "min": p.get("min", 0.0),
-                            "max": p.get("max", 1.0),
-                            "step": p.get("step", 0.01),
-                            "description": p.get("description", ""),
-                        })
-                    params_map[shader_id] = api_params
+                    for p in raw_params:
+                        if isinstance(p, dict):
+                            api_params.append({
+                                "name": p.get("id", f"param{len(api_params)+1}"),
+                                "label": p.get("name", p.get("label", f"Parameter {len(api_params)+1}")),
+                                "default": p.get("default", 0.5),
+                                "min": p.get("min", 0.0),
+                                "max": p.get("max", 1.0),
+                                "step": p.get("step", 0.01),
+                                "description": p.get("description", ""),
+                            })
+                    if api_params:
+                        params_map[shader_id] = api_params
+                        
         except Exception as e:
             print(f"Warning: Failed to load {json_file}: {e}")
     
