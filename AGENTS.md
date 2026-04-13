@@ -24,8 +24,37 @@ Both bridges receive webhooks from external applications, save them locally, and
 | `POST /webhook/image-effects` | image_video_effects app |
 | `POST /webhook/flac` | flac_player app (multipart/form-data) |
 | `POST /webhook/sequencer` | web_sequencer app (multipart/form-data) |
+| `POST /webhook/notes` | **cloud_notes app** - structured note data |
 | `GET /files/{path}` | Static file server (Python bridge only) |
 | `GET /health` | Health check endpoint |
+
+### Cloud Notes Integration
+
+The `cloud_notes` React app sends structured note data to `/webhook/notes`. Notes are stored as:
+- **JSON files** (`notes/webhook/YYYYmmddTHHMMSSffffff_title.json`) - Full structured data with encrypted content
+- **Markdown files** (`notes/markdown/title.md`) - Human-readable version with YAML frontmatter
+
+**Payload format:**
+```json
+{
+  "source": "cloud_notes",
+  "event": "note.created" | "note.updated",
+  "timestamp": "2026-01-15T10:30:00Z",
+  "data": {
+    "id": "uuid",
+    "title": "Note Title",
+    "content": "ENC:v1:..." | "Plain text content",
+    "subject": "General",
+    "section": "Inbox",
+    "tags": "tag1,tag2",
+    "author": "User",
+    "description": "Packed metadata string",
+    "updatedAt": "2026-01-15T10:30:00Z"
+  }
+}
+```
+
+**Authentication:** Supports HMAC signature verification via `X-Hub-Signature-256` header.
 
 ---
 
@@ -310,11 +339,16 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 │   ├── covers/                # Cover art
 │   ├── playlists/             # Playlist JSON
 │   └── metadata/              # Track metadata
-└── sequencer/
-    ├── projects/              # Project JSON files
-    ├── midi/                  # MIDI files
-    ├── samples/               # Audio samples
-    └── recordings/            # Exported recordings
+├── sequencer/
+│   ├── projects/              # Project JSON files
+│   ├── midi/                  # MIDI files
+│   ├── samples/               # Audio samples
+│   └── recordings/            # Exported recordings
+└── notes/                      # Notes storage
+    ├── webhook/               # Structured note JSON from cloud_notes
+    │   └── YYYYmmddTHHMMSSffffff_title.json
+    └── markdown/              # Human-readable markdown exports
+        └── title.md
 ```
 
 ---

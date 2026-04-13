@@ -296,6 +296,113 @@ async def github_webhook(
     )
 
 
+@webhook_router.post("/notes", response_model=FileUploadResponse)
+async def notes_webhook(
+    request: Request,
+    signature: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+):
+    """Cloud Notes webhook - receives structured note data from cloud_notes app.
+    
+    Stores notes as timestamped JSON files under notes/webhook/ directory.
+    Supports encrypted content that the frontend decrypts client-side.
+    """
+    body = await request.body()
+    
+    if not _verify_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON")
+
+    # Validate required fields
+    source = payload.get("source", "cloud_notes")
+    event = payload.get("event", "note.unknown")
+    data = payload.get("data", {})
+    
+    if not data:
+        raise HTTPException(status_code=422, detail="Missing data field")
+
+    # Extract note fields
+    note_id = data.get("id") or _ts_slug()
+    title = data.get("title", "Untitled")
+    content = data.get("content", "")
+    subject = data.get("subject", "General")
+    section = data.get("section", "Inbox")
+    tags = data.get("tags", "")
+    author = data.get("author", "User")
+    description = data.get("description", "")
+    updated_at = data.get("updatedAt") or datetime.now(timezone.utc).isoformat()
+
+    # Build note JSON structure
+    note_data = {
+        "id": note_id,
+        "title": title,
+        "content": content,  # May be encrypted (ENC:v1:...)
+        "subject": subject,
+        "section": section,
+        "tags": tags,
+        "author": author,
+        "description": description,
+        "updatedAt": updated_at,
+        "source": source,
+        "event": event,
+        "receivedAt": datetime.now(timezone.utc).isoformat()
+    }
+
+    # Save to notes/webhook/ directory
+    rel_dir = "notes/webhook"
+    base_dir = Path(settings.files_dir) / rel_dir
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Use timestamp + sanitized title as filename
+    safe_title = "".join(c if c.isalnum() or c in "._-" else "_" for c in title)
+    filename = f"{_ts_slug()}_{safe_title}.json"
+    file_path = base_dir / filename
+    file_path.write_text(json.dumps(note_data, indent=2), encoding="utf-8")
+    
+    rel_path = f"{rel_dir}/{filename}"
+    
+    # Also save as a simple markdown file for easy access
+    # Extract/decrypt hint for markdown version (if encrypted, note it)
+    md_content = content
+    if content.startswith("ENC:v1:"):
+        md_content = f"<!-- Encrypted content - use cloud_notes app to decrypt -->\n\n<!-- {content[:50]}... -->"
+    
+    md_dir = Path(settings.files_dir) / "notes" / "markdown"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_filename = f"{safe_title}.md"
+    md_path = md_dir / md_filename
+    
+    # Build markdown with frontmatter
+    md_output = f"""---
+id: {note_id}
+title: {title}
+subject: {subject}
+section: {section}
+tags: {tags}
+author: {author}
+updatedAt: {updated_at}
+---
+
+{md_content}
+"""
+    md_path.write_text(md_output, encoding="utf-8")
+    md_rel_path = f"notes/markdown/{md_filename}"
+    
+    # Upload to external storage
+    remote_path = await ftp_client.upload(file_path, rel_path)
+    md_remote_path = await ftp_client.upload(md_path, md_rel_path)
+
+    return FileUploadResponse(
+        status="success",
+        message=f"Note saved: {title}",
+        files=[rel_path, md_rel_path],
+        remote_files=[p for p in [remote_path, md_remote_path] if p],
+    )
+
+
 # ====================== Static File Serving ======================
 @files_router.get("/{file_path:path}", summary="Serve stored files with correct MIME")
 async def serve_file(file_path: str):
