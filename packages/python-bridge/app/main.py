@@ -42,23 +42,21 @@ app = FastAPI(
 )
 
 # Enhanced CORS middleware - MUST be added before routers
-ALLOWED_ORIGINS = [
-    "https://code.noahcohn.com",
-    "https://storage.noahcohn.com",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:8000",
-]
+ALLOWED_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=86400,
-)
+# FastAPI's CORSMiddleware rejects wildcard origins when credentials=True.
+# If '*' is configured, skip the middleware and rely on the global OPTIONS
+# handler and response middleware below (which reflect the actual origin).
+if "*" not in ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=86400,
+    )
 
 # Explicit OPTIONS handler for all paths (handles preflight at nginx level too)
 @app.options("/{path:path}")
@@ -208,7 +206,26 @@ async def media_gallery():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "contabo-storage-manager"}
+    # Verify storage is writable
+    storage_ok = True
+    storage_error = None
+    try:
+        test_path = Path(settings.files_dir) / ".healthcheck"
+        test_path.write_text("ok")
+        test_path.unlink()
+    except Exception as exc:
+        storage_ok = False
+        storage_error = str(exc)
+
+    return {
+        "status": "ok" if storage_ok else "error",
+        "service": "contabo-storage-manager",
+        "storage": {
+            "writable": storage_ok,
+            "path": settings.files_dir,
+            "error": storage_error,
+        },
+    }
 
 
 # Redirect routes for backwards compatibility (game calls these without /api prefix)

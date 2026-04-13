@@ -619,7 +619,7 @@ async def get_zones_manifest():
     return ZoneManifestResponse(zones=zones)
 
 
-@pachinball_router.get("/health")
+@pachinball_router.get("/pachinball/health")
 async def pachinball_health_check():
     """Health check for Pachinball content endpoints."""
     pachinball_dir = _get_pachinball_dir()

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     external_ftp_port: Optional[int] = 22
     external_ftp_dir: Optional[str] = "/"
 
+    # CORS
+    cors_origins: str = "https://code.noahcohn.com,https://storage.noahcohn.com,https://noahcohn.com,http://localhost:3000,http://localhost:5173,http://localhost:8000"
+
     # Polling settings
     external_api_url: Optional[str] = None
     external_api_key: Optional[str] = None

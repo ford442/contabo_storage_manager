@@ -372,7 +372,7 @@ async def notes_webhook(
     
     md_dir = Path(settings.files_dir) / "notes"
     md_dir.mkdir(parents=True, exist_ok=True)
-    md_filename = f"{safe_title}.md"
+    md_filename = f"{timestamp}_{safe_title}.md"
     md_path = md_dir / md_filename
     
     # Build markdown with frontmatter
@@ -391,9 +391,17 @@ updatedAt: {updated_at}
     md_path.write_text(md_output, encoding="utf-8")
     md_rel_path = f"notes/{md_filename}"
     
-    # Upload to external storage
-    remote_path = await ftp_client.upload(file_path, rel_path)
-    md_remote_path = await ftp_client.upload(md_path, md_rel_path)
+    # Upload to external storage (non-fatal)
+    remote_path = None
+    md_remote_path = None
+    try:
+        remote_path = await ftp_client.upload(file_path, rel_path)
+    except Exception as exc:
+        logger.warning("FTP upload failed for note JSON (non-fatal): %s", exc)
+    try:
+        md_remote_path = await ftp_client.upload(md_path, md_rel_path)
+    except Exception as exc:
+        logger.warning("FTP upload failed for note markdown (non-fatal): %s", exc)
 
     return FileUploadResponse(
         status="success",
