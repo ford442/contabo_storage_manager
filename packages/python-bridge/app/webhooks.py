@@ -370,7 +370,7 @@ async def notes_webhook(
     if content.startswith("ENC:v1:"):
         md_content = f"<!-- Encrypted content - use cloud_notes app to decrypt -->\n\n<!-- {content[:50]}... -->"
     
-    md_dir = Path(settings.files_dir) / "notes" / "markdown"
+    md_dir = Path(settings.files_dir) / "notes"
     md_dir.mkdir(parents=True, exist_ok=True)
     md_filename = f"{safe_title}.md"
     md_path = md_dir / md_filename
@@ -389,7 +389,7 @@ updatedAt: {updated_at}
 {md_content}
 """
     md_path.write_text(md_output, encoding="utf-8")
-    md_rel_path = f"notes/markdown/{md_filename}"
+    md_rel_path = f"notes/{md_filename}"
     
     # Upload to external storage
     remote_path = await ftp_client.upload(file_path, rel_path)

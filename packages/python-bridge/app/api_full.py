@@ -25,6 +25,10 @@ from aiocache import Cache
 from google.cloud import storage
 from google.oauth2 import service_account
 
+# Include webhook and notes routers for cloud_notes / rain_edit compatibility
+from .webhooks import webhook_router
+from .notes_router import notes_router
+
 # ========================= CONFIGURATION =========================
 BUCKET_NAME = os.environ.get("GCP_BUCKET_NAME")
 CREDENTIALS_JSON = os.environ.get("GCP_CREDENTIALS")
@@ -145,6 +149,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount routers from the standard bridge so cloud_notes webhook + notes APIs work
+app.include_router(webhook_router)
+app.include_router(notes_router)
 
 # ========================= MODELS =========================
 class ItemPayload(BaseModel):
