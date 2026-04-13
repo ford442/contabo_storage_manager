@@ -84,6 +84,7 @@ class NoteContent(BaseModel):
 async def list_notes():
     """List all notes, sorted by last-modified descending."""
     notes_dir = _notes_dir()
+    notes_dir.mkdir(parents=True, exist_ok=True)
     if not notes_dir.exists():
         return []
 

@@ -147,7 +147,7 @@ async def list_music(
     return MusicListResponse(tracks=tracks, total=len(tracks))
 
 
-@audio_router.get("/music/{track_id}")
+@audio_router.get("/music/tracks/{track_id}")
 async def get_music_track(track_id: str):
     """Get a specific music track's metadata."""
     tracks = _load_music_index()

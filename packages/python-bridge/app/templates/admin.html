@@ -1,52 +1,329 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>1ink Admin Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage Manager — Universal Upload Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2"></script>
-  <style>body { font-family: system-ui; } .log { font-family: monospace; }</style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .drop-active { border-color: #10b981; background: rgba(16,185,129,0.08); }
+    .file-row { transition: background 0.15s ease; }
+    .file-row:hover { background: rgba(255,255,255,0.03); }
+    .spinner { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
 </head>
-<body class="bg-zinc-950 text-white p-8">
-  <div class="max-w-5xl mx-auto">
-    <h1 class="text-4xl font-bold mb-8">🚀 1ink VPS Control Panel</h1>
-    
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
-      <button hx-post="/api/admin/run?command_key=build-frontend" 
-              hx-target="#log-window" 
-              class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">Build Frontend (npm run build)</button>
-      <button hx-post="/api/admin/run?command_key=git-pull" 
-              class="bg-blue-600 hover:bg-blue-700 px-6 py-4 rounded-xl text-lg font-medium">Git Pull</button>
-      <button hx-post="/api/admin/run?command_key=npm-install" 
-              class="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-xl text-lg font-medium">NPM Install</button>
-      <button hx-post="/api/admin/run?command_key=restart-uvicorn" 
-              class="bg-amber-600 hover:bg-amber-700 px-6 py-4 rounded-xl text-lg font-medium">Restart Storage Manager</button>
-      <button hx-post="/api/admin/run?command_key=sync-indexes" 
-              class="bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-xl text-lg font-medium">Sync All Indexes</button>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-6 md:p-10">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Storage Manager</h1>
+        <p class="text-zinc-400 mt-1">Universal upload dashboard — drop files and route them automatically.</p>
+      </div>
+      <a href="/" class="text-sm text-zinc-400 hover:text-white transition">
+        <i class="fas fa-arrow-left mr-1"></i> Back to Gallery
+      </a>
     </div>
 
-    <!-- Live Log Window -->
-    <div id="log-window" class="bg-black border border-zinc-800 rounded-2xl p-6 h-96 overflow-auto font-mono text-sm text-emerald-400 log">
-      Click any button above — live output appears here...
+    <!-- Global Metadata -->
+    <div class="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-6 mb-6">
+      <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-4">Default Metadata</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-xs text-zinc-500 mb-1">Default Title / Name</label>
+          <input id="global-title" type="text" placeholder="Used when file has no custom title" 
+                 class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-500 mb-1">Author</label>
+          <input id="global-author" type="text" placeholder="Artist or creator name" 
+                 class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-500 mb-1">Tags (comma separated)</label>
+          <input id="global-tags" type="text" placeholder="e.g. ambient, demo, wip" 
+                 class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+      </div>
     </div>
 
-    <!-- AI Agent Section (the fun part) -->
-    <div class="mt-12">
-      <h2 class="text-2xl mb-3">🤖 AI Agent Command</h2>
-      <div class="flex gap-3">
-        <input id="ai-input" type="text" placeholder="Type anything... e.g. build frontend and restart" 
-               class="flex-1 bg-zinc-900 border border-zinc-700 rounded-2xl px-6 py-4 text-lg">
-        <button onclick="sendAICommand()" 
-                class="bg-violet-600 hover:bg-violet-700 px-10 rounded-2xl">Send →</button>
+    <!-- Drop Zone -->
+    <div id="drop-zone" 
+         class="border-2 border-dashed border-zinc-700 rounded-2xl p-10 text-center cursor-pointer transition hover:border-zinc-500 bg-zinc-900/40">
+      <div class="text-4xl text-zinc-500 mb-3"><i class="fas fa-cloud-upload-alt"></i></div>
+      <p class="text-zinc-300 font-medium">Drag &amp; drop files here</p>
+      <p class="text-zinc-500 text-sm mt-1">Audio (.flac, .mp3, .wav) • Notes (.md) • Shaders (.wgsl, .json)</p>
+      <input type="file" id="file-input" class="hidden" multiple>
+    </div>
+
+    <!-- Queue -->
+    <div id="queue-section" class="hidden mt-8">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">Upload Queue</h3>
+        <button id="upload-all-btn" onclick="uploadAll()" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition">
+          <i class="fas fa-upload mr-2"></i>Upload All
+        </button>
+      </div>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+        <div class="grid grid-cols-12 gap-4 px-6 py-3 bg-zinc-800/60 text-xs font-medium text-zinc-400 uppercase tracking-wider">
+          <div class="col-span-4 md:col-span-3">File</div>
+          <div class="col-span-3 md:col-span-2">Type</div>
+          <div class="col-span-3 md:col-span-4">Metadata</div>
+          <div class="col-span-2 md:col-span-3 text-right">Status</div>
+        </div>
+        <div id="queue-list" class="divide-y divide-zinc-800"></div>
+      </div>
+    </div>
+
+    <!-- Results / Log -->
+    <div id="results-section" class="hidden mt-6">
+      <div class="bg-black border border-zinc-800 rounded-2xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-zinc-300">Activity Log</h3>
+          <button onclick="clearLog()" class="text-xs text-zinc-500 hover:text-zinc-300">Clear</button>
+        </div>
+        <div id="log-window" class="font-mono text-xs text-emerald-400 space-y-1 max-h-64 overflow-auto"></div>
       </div>
     </div>
   </div>
 
   <script>
-    function sendAICommand() {
-      const input = document.getElementById('ai-input').value;
-      // For now we just echo — later we'll call Grok API and map to commands
-      alert("AI Agent received: " + input + "\n\n(We’ll wire this to real Grok intelligence next step)");
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const queueSection = document.getElementById('queue-section');
+    const queueList = document.getElementById('queue-list');
+    const resultsSection = document.getElementById('results-section');
+    const logWindow = document.getElementById('log-window');
+
+    let queue = [];
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drop-active');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('drop-active');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drop-active');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+      fileInput.value = '';
+    });
+
+    function handleFiles(files) {
+      for (const file of files) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let type = 'other';
+        let icon = 'fa-file';
+        let color = 'text-zinc-400';
+
+        if (['flac','mp3','wav','ogg','m4a','aac'].includes(ext)) {
+          type = 'audio'; icon = 'fa-music'; color = 'text-cyan-400';
+        } else if (ext === 'md') {
+          type = 'note'; icon = 'fa-file-lines'; color = 'text-emerald-400';
+        } else if (['wgsl','json'].includes(ext)) {
+          type = 'shader'; icon = 'fa-cube'; color = 'text-purple-400';
+        }
+
+        const id = Math.random().toString(36).slice(2);
+        const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+        queue.push({
+          id, file, type, ext, icon, color,
+          title: baseName,
+          author: document.getElementById('global-author').value || '',
+          tags: document.getElementById('global-tags').value || '',
+          status: 'ready'
+        });
+      }
+      renderQueue();
+    }
+
+    function renderQueue() {
+      if (queue.length === 0) {
+        queueSection.classList.add('hidden');
+        return;
+      }
+      queueSection.classList.remove('hidden');
+      resultsSection.classList.remove('hidden');
+
+      queueList.innerHTML = queue.map(item => `
+        <div class="file-row grid grid-cols-12 gap-4 px-6 py-4 items-center" id="row-${item.id}">
+          <div class="col-span-4 md:col-span-3 flex items-center gap-3 min-w-0">
+            <i class="fas ${item.icon} ${item.color} text-lg"></i>
+            <span class="truncate text-sm" title="${item.file.name}">${item.file.name}</span>
+          </div>
+          <div class="col-span-3 md:col-span-2">
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-300 capitalize">
+              ${item.type}
+            </span>
+          </div>
+          <div class="col-span-3 md:col-span-4 space-y-2">
+            <input type="text" placeholder="Title" value="${escapeHtml(item.title)}"
+                   onchange="updateMeta('${item.id}', 'title', this.value)"
+                   class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-emerald-500">
+            <div class="flex gap-2">
+              <input type="text" placeholder="Author" value="${escapeHtml(item.author)}"
+                     onchange="updateMeta('${item.id}', 'author', this.value)"
+                     class="w-1/2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-emerald-500">
+              <input type="text" placeholder="Tags" value="${escapeHtml(item.tags)}"
+                     onchange="updateMeta('${item.id}', 'tags', this.value)"
+                     class="w-1/2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-emerald-500">
+            </div>
+          </div>
+          <div class="col-span-2 md:col-span-3 text-right">
+            ${renderStatus(item)}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderStatus(item) {
+      if (item.status === 'ready') {
+        return `<button onclick="uploadItem('${item.id}')" class="text-emerald-400 hover:text-emerald-300 text-sm font-medium">Upload</button>`;
+      }
+      if (item.status === 'uploading') {
+        return `<i class="fas fa-circle-notch spinner text-emerald-400"></i>`;
+      }
+      if (item.status === 'done') {
+        return `<span class="text-emerald-400 text-sm"><i class="fas fa-check mr-1"></i>Done</span>`;
+      }
+      if (item.status === 'error') {
+        return `<span class="text-red-400 text-sm" title="${escapeHtml(item.error || '')}"><i class="fas fa-exclamation-circle mr-1"></i>Failed</span>`;
+      }
+      return '';
+    }
+
+    function updateMeta(id, field, value) {
+      const item = queue.find(q => q.id === id);
+      if (item) item[field] = value;
+    }
+
+    async function uploadAll() {
+      for (const item of queue) {
+        if (item.status === 'ready') await uploadItem(item.id);
+      }
+    }
+
+    async function uploadItem(id) {
+      const item = queue.find(q => q.id === id);
+      if (!item || item.status !== 'ready') return;
+
+      item.status = 'uploading';
+      renderQueue();
+
+      try {
+        if (item.type === 'audio') {
+          await uploadAudio(item);
+        } else if (item.type === 'note') {
+          await uploadNote(item);
+        } else if (item.type === 'shader') {
+          await uploadShader(item);
+        } else {
+          throw new Error('Unsupported file type for upload dashboard');
+        }
+        item.status = 'done';
+        log(`✅ Uploaded ${item.file.name}`);
+      } catch (err) {
+        item.status = 'error';
+        item.error = err.message;
+        log(`❌ Failed ${item.file.name}: ${err.message}`);
+      }
+      renderQueue();
+    }
+
+    async function uploadAudio(item) {
+      const formData = new FormData();
+      formData.append('file', item.file);
+      formData.append('title', item.title || item.file.name);
+      formData.append('author', item.author || 'Unknown');
+      formData.append('tags', item.tags);
+
+      const res = await fetch('/api/songs/upload', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+    }
+
+    async function uploadNote(item) {
+      const text = await item.file.text();
+      const noteName = item.file.name.replace(/\.md$/i, '');
+      const res = await fetch(`/api/notes/write/${encodeURIComponent(noteName)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: text })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+    }
+
+    async function uploadShader(item) {
+      const isWgsl = item.ext === 'wgsl';
+      let payload;
+
+      if (isWgsl) {
+        const code = await item.file.text();
+        const shaderId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        payload = {
+          id: shaderId,
+          name: item.title || item.file.name,
+          author: item.author || 'Unknown',
+          description: '',
+          code: code,
+          tags: item.tags.split(',').map(t => t.trim()).filter(Boolean),
+          type: 'shader'
+        };
+      } else {
+        // JSON shader config
+        const json = await item.file.text();
+        payload = JSON.parse(json);
+        if (!payload.id) {
+          payload.id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        }
+      }
+
+      const res = await fetch('/api/shaders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+    }
+
+    function log(message) {
+      const line = document.createElement('div');
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logWindow.appendChild(line);
+      logWindow.scrollTop = logWindow.scrollHeight;
+    }
+
+    function clearLog() {
+      logWindow.innerHTML = '';
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
   </script>
 </body>

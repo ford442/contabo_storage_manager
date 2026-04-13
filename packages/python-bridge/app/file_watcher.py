@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Set, Callable, Optional
 from watchdog.observers import Observer
@@ -40,6 +42,62 @@ class FileWatcherHandler(FileSystemEventHandler):
             self.on_new_file(dest_path)
 
 
+def _handle_new_audio(path: Path):
+    """Auto-index a new audio file into songs.json."""
+    try:
+        # Delayed import to avoid circular imports at module load time
+        from .api import _load_songs, _save_songs
+    except ImportError as e:
+        logger.error(f"Cannot import song helpers: {e}")
+        return
+
+    ext = path.suffix.lower()
+    allowed_exts = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac'}
+    
+    if ext not in allowed_exts:
+        return
+    
+    songs = _load_songs()
+    filename = path.name
+    
+    # Check if already indexed by filename
+    if any(s.get("filename") == filename for s in songs):
+        logger.info(f"Audio file already indexed: {filename}")
+        return
+    
+    # Generate metadata matching the upload endpoint logic
+    song_id = str(uuid.uuid4())[:8]
+    raw_title = path.stem.replace('_', ' ').replace('-', ' ')
+    title = raw_title.strip() or "Untitled"
+    
+    song = {
+        "id": song_id,
+        "name": f"{title}{ext}",
+        "title": title,
+        "author": "Unknown",
+        "genre": None,
+        "rating": None,
+        "description": f"Auto-discovered on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+        "tags": [],
+        "duration": None,
+        "play_count": 0,
+        "last_played": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "filename": filename,
+        "url": f"/api/music/{song_id}",
+        "size": path.stat().st_size
+    }
+    
+    songs.append(song)
+    _save_songs(songs)
+    logger.info(f"Auto-indexed new audio file: {filename} -> {song_id}")
+
+
+def _handle_new_note(path: Path):
+    """Log new note files — notes are served directly from disk by the notes API."""
+    logger.info(f"New note detected: {path.name}")
+
+
 class VPSFileWatcher:
     """Watch VPS directories for new files."""
     
@@ -48,12 +106,14 @@ class VPSFileWatcher:
         files_dir: str,
         on_video: Optional[Callable[[Path], None]] = None,
         on_image: Optional[Callable[[Path], None]] = None,
-        on_audio: Optional[Callable[[Path], None]] = None
+        on_audio: Optional[Callable[[Path], None]] = None,
+        on_note: Optional[Callable[[Path], None]] = None,
     ):
         self.files_dir = Path(files_dir)
         self.on_video = on_video
         self.on_image = on_image
         self.on_audio = on_audio
+        self.on_note = on_note
         
         self.observers: list[Observer] = []
         self._running = False
@@ -91,23 +151,37 @@ class VPSFileWatcher:
             self.observers.append(observer)
             logger.info(f"Watching image directory: {images_dir}")
         
-        # Watch audio directory
+        # Watch audio directories (including music/ for flac_player)
         audio_dirs = [
             self.files_dir / "audio" / "flac",
             self.files_dir / "audio" / "wav",
+            self.files_dir / "audio" / "music",
         ]
         if self.on_audio:
             for audio_dir in audio_dirs:
                 if audio_dir.exists():
                     handler = FileWatcherHandler(
                         self.on_audio,
-                        extensions={'.flac', '.wav', '.mp3', '.ogg'}
+                        extensions={'.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac'}
                     )
                     observer = Observer()
                     observer.schedule(handler, str(audio_dir), recursive=False)
                     observer.start()
                     self.observers.append(observer)
                     logger.info(f"Watching audio directory: {audio_dir}")
+        
+        # Watch notes directory
+        notes_dir = self.files_dir / "notes"
+        if notes_dir.exists() and self.on_note:
+            handler = FileWatcherHandler(
+                self.on_note,
+                extensions={'.md'}
+            )
+            observer = Observer()
+            observer.schedule(handler, str(notes_dir), recursive=False)
+            observer.start()
+            self.observers.append(observer)
+            logger.info(f"Watching notes directory: {notes_dir}")
     
     def stop(self):
         """Stop watching directories."""
@@ -123,7 +197,8 @@ class VPSFileWatcher:
         results = {
             'videos': [],
             'images': [],
-            'audio': []
+            'audio': [],
+            'notes': []
         }
         
         # Scan videos
@@ -144,19 +219,27 @@ class VPSFileWatcher:
         audio_dirs = [
             self.files_dir / "audio" / "flac",
             self.files_dir / "audio" / "wav",
+            self.files_dir / "audio" / "music",
         ]
         for audio_dir in audio_dirs:
             if audio_dir.exists():
-                for ext in ['.flac', '.wav', '.mp3', '.ogg']:
+                for ext in ['.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac']:
                     results['audio'].extend(audio_dir.glob(f"*{ext}"))
+        
+        # Scan notes
+        notes_dir = self.files_dir / "notes"
+        if notes_dir.exists():
+            results['notes'].extend(notes_dir.glob("*.md"))
         
         return {
             'videos': len(results['videos']),
             'images': len(results['images']),
             'audio': len(results['audio']),
+            'notes': len(results['notes']),
             'video_files': [str(p) for p in results['videos']],
             'image_files': [str(p) for p in results['images']],
             'audio_files': [str(p) for p in results['audio']],
+            'note_files': [str(p) for p in results['notes']],
         }
 
 
@@ -173,29 +256,33 @@ def get_watcher(files_dir: str) -> VPSFileWatcher:
 
 
 def start_watching(files_dir: str):
-    """Start the file watcher."""
+    """Start the file watcher with sensible defaults."""
     def on_video(path: Path):
         logger.info(f"New video: {path}")
-        # Could trigger API update here
     
     def on_image(path: Path):
         logger.info(f"New image: {path}")
-        # Could trigger API update here
     
     def on_audio(path: Path):
-        logger.info(f"New audio: {path}")
-        # Could trigger API update here
+        _handle_new_audio(path)
+    
+    def on_note(path: Path):
+        _handle_new_note(path)
     
     watcher = VPSFileWatcher(
         files_dir,
         on_video=on_video,
         on_image=on_image,
-        on_audio=on_audio
+        on_audio=on_audio,
+        on_note=on_note,
     )
     watcher.start()
     
     # Log initial scan
     scan = watcher.scan_existing()
-    logger.info(f"Initial scan: {scan['videos']} videos, {scan['images']} images, {scan['audio']} audio files")
+    logger.info(
+        f"Initial scan: {scan['videos']} videos, {scan['images']} images, "
+        f"{scan['audio']} audio files, {scan['notes']} notes"
+    )
     
     return watcher

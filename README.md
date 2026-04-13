@@ -29,13 +29,19 @@ Pick the one you prefer, or run both at the same time.
 Internet ──→ (nginx / Caddy / direct)
                │
                ├─── :8000  Python Bridge (FastAPI)
+               │             ├── GET  /admin                  ← universal upload dashboard
+               │             ├── POST /api/songs/upload       ← audio ingestion
+               │             ├── POST /api/notes/write/{name} ← markdown notes
+               │             ├── POST /api/shaders            ← shader metadata + code
                │             ├── POST /webhook/generic
                │             ├── POST /webhook/shopify
                │             ├── POST /webhook/github
-               │             ├── POST /webhook/image-effects   ← image_video_effects
-               │             ├── POST /webhook/flac            ← flac_player
-               │             ├── POST /webhook/sequencer       ← web_sequencer
-               │             └── GET  /files/{path}            ← static file server
+               │             ├── POST /webhook/image-effects  ← image_video_effects
+               │             ├── POST /webhook/sequencer      ← web_sequencer
+               │             └── GET  /files/{path}           ← static file server
+               │
+               ├─── Google Cloud Storage Bucket
+               │        └── Syncs to VPS (audio/music/, notes/, shaders/)
                │
                ├─── :3000  Node Bridge (Express)
                │             ├── POST /webhook/generic
@@ -43,10 +49,18 @@ Internet ──→ (nginx / Caddy / direct)
                │             └── POST /webhook/github
                │
                └─── :8080  Nginx static server (nginx-files container)
-                             └── GET /<any-path>               ← serves FILES_DIR directly
+                             └── GET /<any-path>              ← serves FILES_DIR directly
 
 All services write to /home/ftpbridge/files  ←── single FTP account, vsftpd served
 ```
+
+### Upload Architecture
+
+- **Frontend uploads are skipped** in client apps. Instead, all file management happens through:
+  1. The **`/admin`** dashboard (drag-and-drop universal uploader)
+  2. **Google Cloud Storage** bucket sync (drop files in the bucket and the VPS file watcher auto-indexes them)
+- Audio tracks dropped into `audio/music/` are automatically scanned and added to `songs.json` if missing.
+- Markdown notes dropped into `notes/` are immediately available via the `/api/notes/` REST endpoints.
 
 ---
 
@@ -309,8 +323,8 @@ webhooks/
 
 ## Supported Apps
 
-Three web apps have dedicated webhook endpoints and organised storage layouts.
-All three share the **same single FTP account** configured in `.env`.
+The following integrations have dedicated endpoints and organised storage layouts.
+All share the **same single FTP account** configured in `.env`.
 
 ### Storage layout
 
@@ -325,11 +339,14 @@ All three share the **same single FTP account** configured in `.env`.
 │       └── YYYY-MM-DD/              # Generated images / videos / depth maps
 │
 ├── audio/
-│   ├── flac/                        # FLAC audio files
+│   ├── music/                       # Canonical music library (FLAC, MP3, WAV, OGG)
+│   ├── flac/                        # Legacy FLAC audio files
 │   ├── wav/                         # WAV and AIFF audio files
 │   ├── covers/                      # Album / track cover art
 │   ├── playlists/                   # Playlist JSON
 │   └── metadata/                    # Track metadata JSON
+│
+├── notes/                           # Plain-text markdown notes for rain_edit
 │
 └── sequencer/
     ├── projects/                    # Full project JSON files
@@ -397,45 +414,27 @@ await fetch(`${STORAGE_URL}/webhook/image-effects`, {
 
 [github.com/ford442/flac_player](https://github.com/ford442/flac_player)
 
-**Endpoint:** `POST /webhook/flac`
-**Content-Type:** `multipart/form-data`
+`flac_player` is now a **read-only client**. It does not upload files directly. Instead, it streams from `storage.noahcohn.com` and relies on the Storage Manager for library management.
 
-| `action` field | File ext | Stored at |
-|---|---|---|
-| `upload_audio` | `.flac` | `audio/flac/` |
-| `upload_audio` | `.wav`, `.aiff` | `audio/wav/` |
-| `upload_cover` | any image | `audio/covers/` |
-| `save_playlist` | *(no file)* | `audio/playlists/` |
-| `save_metadata` | *(no file)* | `audio/metadata/` |
+**Upload options:**
+1. Open `https://storage.noahcohn.com/admin` and drag audio files into the upload dashboard.
+2. Drop `.flac` or `.mp3` files directly into the connected Google Cloud Storage bucket under `audio/music/`. The VPS file watcher will auto-detect them, assign a UUID, generate a default title, and append them to `songs.json`.
 
-**Example — upload a FLAC file:**
+**API endpoints used by the player:**
 
-```bash
-curl -X POST https://VPS_IP:8000/webhook/flac \
-  -H "X-Hub-Signature-256: sha256=$(cat track.flac | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')" \
-  -F "action=upload_audio" \
-  -F "file=@track.flac"
+```
+GET  /api/songs              # list library
+GET  /api/songs/{id}         # track metadata
+GET  /api/music/{id}         # stream audio file
+POST /api/songs/{id}/play    # record play event
 ```
 
-**Example — upload cover art:**
-
-```bash
-curl -X POST https://VPS_IP:8000/webhook/flac \
-  -F "action=upload_cover" \
-  -F "file=@cover.jpg"
-```
-
-**Load files directly in the player (static URL):**
+**Load a track in the player:**
 
 ```js
-const STORAGE = "https://storage.yourdomain.com";   // nginx-files on :8080 behind TLS
-
-// Load a FLAC track
-const audio = new Audio(`${STORAGE}/audio/flac/20260325T120000_track.flac`);
+const STORAGE = "https://storage.noahcohn.com";
+const audio = new Audio(`${STORAGE}/api/music/abc12345`);
 audio.play();
-
-// Or via the Python bridge /files endpoint
-const audio2 = new Audio(`https://VPS_IP:8000/files/audio/flac/20260325T120000_track.flac`);
 ```
 
 ---
@@ -503,6 +502,42 @@ const project = await res.json();
 const midiRes = await fetch(`${STORAGE}/sequencer/midi/20260325T120000_bassline.mid`);
 const midiBuffer = await midiRes.arrayBuffer();
 ```
+
+---
+
+### 4. rain_edit
+
+**Endpoint:** `/api/notes/*`  
+**Storage:** `files/notes/<name>.md`
+
+`rain_edit` stores plain-text Markdown notes directly on the VPS. Notes are exposed through a simple REST API and are also watched by the file watcher, so dropping `.md` files into the Google Bucket under `notes/` makes them instantly available.
+
+**API Endpoints:**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/notes/list` | List all notes (sorted by modified time) |
+| `GET` | `/api/notes/read/{note_name}` | Read a note by name (no `.md` extension needed) |
+| `POST` | `/api/notes/write/{note_name}` | Create or overwrite a note |
+| `DELETE` | `/api/notes/delete/{note_name}` | Delete a note |
+
+**Example — write a note:**
+
+```bash
+curl -X POST https://VPS_IP:8000/api/notes/write/project-ideas \
+  -H "Content-Type: application/json" \
+  -d '{"content": "- Build a universal upload dashboard\n- Sync GCS bucket to VPS automatically"}'
+```
+
+**Example — read a note:**
+
+```bash
+curl https://VPS_IP:8000/api/notes/read/project-ideas
+```
+
+**Upload via admin dashboard:**
+
+Drag any `.md` file into `https://storage.noahcohn.com/admin` and it will be routed to `/api/notes/write/{filename}` automatically.
 
 ---
 
