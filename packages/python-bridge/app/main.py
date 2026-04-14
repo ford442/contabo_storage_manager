@@ -45,10 +45,20 @@ app = FastAPI(
 # Enhanced CORS middleware - MUST be added before routers
 ALLOWED_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 
-# FastAPI's CORSMiddleware rejects wildcard origins when credentials=True.
-# If '*' is configured, skip the middleware and rely on the global OPTIONS
-# handler and response middleware below (which reflect the actual origin).
-if "*" not in ALLOWED_ORIGINS:
+# CORSMiddleware must ALWAYS be installed so OPTIONS preflights are intercepted
+# at the middleware layer. Without it, router paths return 405 before the
+# catch-all @app.options route is reached.
+if "*" in ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=86400,
+    )
+else:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
@@ -251,17 +261,18 @@ async def leaderboard_redirect(request: Request):
     query = request.query_params
     return RedirectResponse(url=f"/api/leaderboard?{query}", status_code=307)
 
-# Global CORS response handler - ensures all responses have CORS headers
+# Global CORS response handler - adds headers only when missing so we don't
+# duplicate values already set by CORSMiddleware.
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
     response = await call_next(request)
     origin = request.headers.get("origin", "*")
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-    else:
-        response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    response.headers["Vary"] = "Origin"
+    if "access-control-allow-origin" not in response.headers:
+        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
+    if "access-control-allow-credentials" not in response.headers:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    if "vary" not in response.headers:
+        response.headers["Vary"] = "Origin"
     return response
 
 # ── CONFIG ──

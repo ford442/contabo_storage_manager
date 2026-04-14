@@ -216,6 +216,7 @@ async def read_note(note_name: str):
 @notes_router.post("/write/{note_name}")
 async def write_note(note_name: str, body: WriteNoteRequest):
     """Create or overwrite a note by name."""
+    note_name = _slugify(note_name)
     _validate_name(note_name)
     notes_dir = _notes_dir()
     notes_dir.mkdir(parents=True, exist_ok=True)
