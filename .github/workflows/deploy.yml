@@ -17,7 +17,20 @@ jobs:
           script: |
             cd /root/contabo_storage_manager
             git pull origin main
-            docker compose --profile full up -d --build
+
+            # Try Docker first; fall back to systemd if Docker is unavailable
+            if command -v docker &> /dev/null && [ -f docker-compose.yml ]; then
+              echo "Using Docker deployment..."
+              docker compose --profile full up -d --build
+            else
+              echo "Using systemd deployment..."
+              bash setup-services.sh
+              systemctl restart contabo-storage-python
+              systemctl restart contabo-storage-node || true
+              systemctl enable contabo-storage-sync.timer || true
+              systemctl start contabo-storage-sync.timer || true
+            fi
+
             echo "Waiting for API to be ready..."
             for i in {1..30}; do
               if curl -sf http://localhost:8000/health > /dev/null; then
@@ -26,6 +39,7 @@ jobs:
               fi
               sleep 2
             done
+
             echo "Triggering music sync..."
             curl -sf -X POST http://localhost:8000/api/admin/sync-music || true
             echo "Deployed at $(date)"

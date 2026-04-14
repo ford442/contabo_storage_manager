@@ -487,6 +487,8 @@ class SongMetadata(BaseModel):
     created_at: Optional[str] = None
     url: Optional[str] = None
     size: Optional[int] = None
+    filename: Optional[str] = None
+    type: Optional[str] = None
 
 
 class SongStats(BaseModel):
@@ -732,6 +734,22 @@ async def stream_music_file(song_id: str):
     base = Path(settings.files_dir)
     audio_dir = base / "audio" / "music"
     
+    def _media_type_for_ext(path: Path) -> str:
+        ext = path.suffix.lower()
+        if ext == ".flac":
+            return "audio/flac"
+        elif ext == ".wav":
+            return "audio/wav"
+        elif ext == ".ogg":
+            return "audio/ogg"
+        elif ext == ".mp3":
+            return "audio/mpeg"
+        elif ext == ".m4a":
+            return "audio/mp4"
+        elif ext == ".aac":
+            return "audio/aac"
+        return "audio/mpeg"
+
     # Try to find the file by filename or song_id
     filename = song.get("filename")
     if filename:
@@ -739,25 +757,17 @@ async def stream_music_file(song_id: str):
         if file_path.exists():
             return FileResponse(
                 file_path,
-                media_type="audio/mpeg",
+                media_type=_media_type_for_ext(file_path),
                 headers={"Accept-Ranges": "bytes"}
             )
-    
+
     # Try common extensions
-    for ext in [".mp3", ".flac", ".wav", ".ogg"]:
+    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
         file_path = audio_dir / f"{song_id}{ext}"
         if file_path.exists():
-            media_type = "audio/mpeg"
-            if ext == ".flac":
-                media_type = "audio/flac"
-            elif ext == ".wav":
-                media_type = "audio/wav"
-            elif ext == ".ogg":
-                media_type = "audio/ogg"
-            
             return FileResponse(
                 file_path,
-                media_type=media_type,
+                media_type=_media_type_for_ext(file_path),
                 headers={"Accept-Ranges": "bytes"}
             )
     

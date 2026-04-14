@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync music files from GCS to local storage
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/contabo_storage_manager
+EnvironmentFile=/root/contabo_storage_manager/.env
+ExecStart=/usr/bin/python3 /root/contabo_storage_manager/scripts/sync_gcs_music.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=contabo-storage-sync

@@ -45,26 +45,32 @@ echo "    ✓ Node dependencies installed"
 
 echo ""
 echo "[3] Installing systemd services..."
-
-# Install Python service
 cp "$SERVICE_DIR/contabo-storage-python.service" /etc/systemd/system/
-
-# Install Node service
 cp "$SERVICE_DIR/contabo-storage-node.service" /etc/systemd/system/
-
-# Reload systemd
+cp "$SERVICE_DIR/contabo-storage-sync.service" /etc/systemd/system/ || true
+cp "$SERVICE_DIR/contabo-storage-sync.timer" /etc/systemd/system/ || true
 systemctl daemon-reload
-
 echo "    ✓ Services installed"
 
 echo ""
-echo "[4] Creating models directory..."
-mkdir -p /data/files/models
-chmod 755 /data/files/models
-echo "    ✓ Models directory ready"
+echo "[4] Creating data directories..."
+mkdir -p /data/files/models /data/files/audio/music /data/files/audio/flac /data/files/audio/wav
+chmod -R 755 /data/files
+echo "    ✓ Data directories ready"
 
 echo ""
-echo "[5] Testing Python service..."
+echo "[5] Installing nginx config..."
+if [ -d /etc/nginx/sites-available ]; then
+    cp "$REPO_DIR/config/storage.noahcohn.com.conf" /etc/nginx/sites-available/storage.noahcohn.com.conf
+    ln -sf /etc/nginx/sites-available/storage.noahcohn.com.conf /etc/nginx/sites-enabled/storage.noahcohn.com.conf
+    nginx -t && systemctl reload nginx
+    echo "    ✓ Nginx config installed"
+else
+    echo "    ⚠ Nginx not detected; skipping nginx config"
+fi
+
+echo ""
+echo "[6] Testing Python service..."
 cd "$PYTHON_DIR"
 source venv/bin/activate
 python3 -c "from app.main import app; print('    ✓ Python app loads successfully')"
@@ -80,6 +86,7 @@ echo ""
 echo "To enable on boot:"
 echo "  systemctl enable contabo-storage-python"
 echo "  systemctl enable contabo-storage-node"
+echo "  systemctl enable contabo-storage-sync.timer"
 echo ""
 echo "To check status:"
 echo "  systemctl status contabo-storage-python"
