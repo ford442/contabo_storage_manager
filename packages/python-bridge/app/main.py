@@ -21,6 +21,7 @@ from .sequencer_router import sequencer_router
 from .vps_browser_router import vps_browser_router
 from .notes_router import notes_router
 from .pachinball_router import pachinball_router
+from .file_watcher import start_watching
 
 
 # === SSH-POWERED ADMIN PANEL (SIMPLE VERSION - NO TEMPLATES) ===
@@ -74,6 +75,12 @@ async def handle_options(path: str, request: Request):
             "Vary": "Origin",
         }
     )
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting file watcher for %s", settings.files_dir)
+    start_watching(settings.files_dir)
+
 
 # Include routers
 app.include_router(webhook_router)
@@ -277,6 +284,32 @@ ALLOWED_COMMANDS = {
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
+
+@app.post("/api/admin/sync-music")
+async def sync_music_admin(background_tasks: BackgroundTasks):
+    """Trigger a background sync of music files from GCS to local storage."""
+    import subprocess
+    import sys
+
+    def run_sync():
+        script_path = Path(__file__).parent.parent.parent.parent / "scripts" / "sync_gcs_music.py"
+        # Fallback for Docker layout where repo root is /app
+        if not script_path.exists():
+            script_path = Path("/app/scripts/sync_gcs_music.py")
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            capture_output=True,
+            text=True,
+        )
+        logger.info(f"Sync music exit code: {result.returncode}")
+        if result.stdout:
+            logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
+    background_tasks.add_task(run_sync)
+    return {"success": True, "message": "Music sync started in background"}
+
 
 @app.post("/api/admin/run")
 async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):

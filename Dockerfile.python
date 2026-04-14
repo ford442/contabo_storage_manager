@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source
 COPY packages/python-bridge/app ./app
 COPY packages/shared ./shared
+COPY scripts ./scripts
 
 # Create log and data dirs
 RUN mkdir -p /var/log/ftpbridge /data/files

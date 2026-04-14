@@ -3,8 +3,10 @@
 import sys
 sys.path.insert(0, '/root/contabo_storage_manager/packages/python-bridge')
 
-# Import the full app (it creates its own FastAPI instance)
-from app.api_full import app
+# DEPRECATED: Use app.main:app for the unified Storage Manager API.
+# api_full.py does not include /api/songs/tags, /api/songs/stats, or /api/music/{id}
+# required by flac_player. Switching to app.main:app.
+from app.main import app
 from app.file_watcher import start_watching
 from app.config import settings
 

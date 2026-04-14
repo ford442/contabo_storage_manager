@@ -8,7 +8,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Restart VPS Container
+      - name: Deploy and sync on VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -17,5 +17,15 @@ jobs:
           script: |
             cd /root/contabo_storage_manager
             git pull origin main
-            docker compose restart python-bridge
+            docker compose --profile full up -d --build
+            echo "Waiting for API to be ready..."
+            for i in {1..30}; do
+              if curl -sf http://localhost:8000/health > /dev/null; then
+                echo "API is up"
+                break
+              fi
+              sleep 2
+            done
+            echo "Triggering music sync..."
+            curl -sf -X POST http://localhost:8000/api/admin/sync-music || true
             echo "Deployed at $(date)"

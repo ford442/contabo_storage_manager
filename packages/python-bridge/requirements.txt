@@ -9,3 +9,5 @@ python-multipart>=0.0.9
 paramiko>=3.5.0
 asyncssh
 jinja2
+google-cloud-storage
+watchdog
