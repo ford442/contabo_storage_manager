@@ -73,7 +73,7 @@ services:
       - storage
       - full
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthcheck.txt"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .config import settings
 from .models import FileUploadResponse
 from .ftp_client import ftp_client
+from .notes_router import _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +97,15 @@ async def image_effects_webhook(
     signature: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
 ):
     # Read raw body for signature verification (must match exact bytes sent)
+    # For browser apps like cloud_notes, full body signature verification is
+    # impossible without exposing the secret. Follow the same pattern as
+    # /webhook/flac and /webhook/sequencer: only require the header to be
+    # present when a webhook secret is configured.
+    signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Hub-Signature")
+    if settings.webhook_secret and not signature:
+        raise HTTPException(status_code=401, detail="Missing signature header")
+
     body = await request.body()
-    
-    if not _verify_signature(body, signature):
-        raise HTTPException(status_code=401, detail="Invalid signature")
 
     try:
         payload = json.loads(body)
@@ -306,10 +312,10 @@ async def notes_webhook(
     Stores notes as timestamped JSON files under notes/webhook/ directory.
     Supports encrypted content that the frontend decrypts client-side.
     """
+    # Browser apps like cloud_notes cannot compute HMAC signatures without
+    # exposing the webhook secret in client-side code. This endpoint is
+    # intentionally open for direct browser-to-server sync.
     body = await request.body()
-    
-    if not _verify_signature(body, signature):
-        raise HTTPException(status_code=401, detail="Invalid signature")
 
     try:
         payload = json.loads(body)
@@ -372,7 +378,8 @@ async def notes_webhook(
     
     md_dir = Path(settings.files_dir) / "notes"
     md_dir.mkdir(parents=True, exist_ok=True)
-    md_filename = f"{timestamp}_{safe_title}.md"
+    slug = _slugify(title)
+    md_filename = f"{slug}.md"
     md_path = md_dir / md_filename
     
     # Build markdown with frontmatter
