@@ -208,7 +208,7 @@ async def media_gallery():
             }
 
             function uploadFile() {
-                alert("Upload modal would go here (we can make a nice drag-and-drop modal next)");
+                window.location.href = '/admin';
             }
 
             // Init
@@ -294,7 +294,12 @@ ALLOWED_COMMANDS = {
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_panel(request: Request):
-    return templates.TemplateResponse("admin.html", {"request": request})
+    template_path = Path(__file__).parent / "templates" / "admin.html"
+    if not template_path.exists():
+        logger.error(f"Admin template not found at {template_path}")
+        raise HTTPException(status_code=404, detail="Admin template not found")
+    html = template_path.read_text(encoding="utf-8")
+    return HTMLResponse(content=html)
 
 @app.post("/api/admin/sync-music")
 async def sync_music_admin(background_tasks: BackgroundTasks):

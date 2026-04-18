@@ -9,8 +9,8 @@ cd /root/contabo_storage_manager
 echo "Pulling latest code..."
 git pull origin main
 
-echo "Restarting python-bridge container..."
-docker compose restart python-bridge
+echo "Rebuilding and restarting python-bridge container..."
+docker compose --profile python up -d --build python-bridge
 
 echo "Checking health..."
 sleep 3
