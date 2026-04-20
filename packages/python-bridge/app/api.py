@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -931,6 +931,131 @@ async def upload_song(
         "song": song,
         "message": f"Uploaded {filename} successfully"
     }
+
+
+# ====================== Share API ======================
+
+class ShareCreateRequest(BaseModel):
+    track_ids: List[str]
+    title: str
+    expires_in_days: Optional[int] = 30
+
+
+class ShareCreateResponse(BaseModel):
+    share_id: str
+    title: str
+    track_count: int
+    full_url: str
+
+
+class ShareGetResponse(BaseModel):
+    title: str
+    tracks: List[SongMetadata]
+
+
+def _get_shares_file() -> Path:
+    """Get the shares JSON file path."""
+    base = Path(settings.files_dir)
+    shares_file = base / "shares.json"
+    return shares_file
+
+
+def _load_shares() -> dict:
+    """Load shares from JSON file."""
+    shares_file = _get_shares_file()
+    if not shares_file.exists():
+        return {}
+    try:
+        with open(shares_file, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _save_shares(shares: dict):
+    """Save shares to JSON file."""
+    shares_file = _get_shares_file()
+    shares_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(shares_file, "w") as f:
+        json.dump(shares, f, indent=2)
+
+
+@api_router.post("/share", response_model=ShareCreateResponse)
+async def create_share(request: ShareCreateRequest):
+    """Create a shareable playlist link."""
+    songs = _load_songs()
+    track_map = {s.get("id"): s for s in songs if s.get("id")}
+
+    tracks = []
+    for tid in request.track_ids:
+        song = track_map.get(tid)
+        if song:
+            # Ensure url is present
+            if not song.get("url") and song.get("filename"):
+                base_url = str(settings.static_base_url).rstrip("/")
+                song["url"] = f"{base_url}/audio/music/{song['filename']}"
+            tracks.append(song)
+
+    if not tracks:
+        raise HTTPException(status_code=400, detail="No valid tracks found for sharing")
+
+    share_id = str(uuid.uuid4())[:12]
+    shares = _load_shares()
+
+    # Prune expired shares while we're at it
+    now = datetime.now(timezone.utc)
+    expired_keys = [
+        k for k, v in shares.items()
+        if v.get("expires_at") and datetime.fromisoformat(v["expires_at"]) < now
+    ]
+    for k in expired_keys:
+        del shares[k]
+
+    shares[share_id] = {
+        "title": request.title,
+        "tracks": tracks,
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=request.expires_in_days or 30)).isoformat(),
+    }
+    _save_shares(shares)
+
+    base_url = str(settings.static_base_url).rstrip("/").removesuffix("/files")
+    full_url = f"{base_url}/api/share/{share_id}"
+
+    return ShareCreateResponse(
+        share_id=share_id,
+        title=request.title,
+        track_count=len(tracks),
+        full_url=full_url,
+    )
+
+
+@api_router.get("/share/{share_id}", response_model=ShareGetResponse)
+async def get_share(share_id: str):
+    """Retrieve a shared playlist by ID."""
+    shares = _load_shares()
+    share = shares.get(share_id)
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    # Check expiration
+    expires_at = share.get("expires_at")
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+            if expiry < datetime.now(timezone.utc):
+                raise HTTPException(status_code=410, detail="Share link has expired")
+        except ValueError:
+            pass
+
+    tracks = share.get("tracks", [])
+    # Enrich URLs if missing
+    base_url = str(settings.static_base_url).rstrip("/")
+    for t in tracks:
+        if not t.get("url") and t.get("filename"):
+            t["url"] = f"{base_url}/audio/music/{t['filename']}"
+
+    return ShareGetResponse(title=share.get("title", "Shared Playlist"), tracks=tracks)
 
 
 @api_router.get("/health")
