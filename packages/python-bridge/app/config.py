@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     external_api_key: Optional[str] = None
     poll_interval_seconds: int = 60
 
+    # External FLAC Player backend (optional)
+    # When set, uploaded audio files are also registered with this API.
+    flac_player_api_url: Optional[str] = None
+
     # FTP settings (alternative to EXTERNAL_FTP_*)
     ftp_host: Optional[str] = None
     ftp_port: int = 21

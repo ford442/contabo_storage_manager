@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,7 @@ from .config import settings
 from .models import FileUploadResponse
 from .ftp_client import ftp_client
 from .notes_router import _slugify
+from .flac_client import register_song_with_flac_player
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,46 @@ async def flac_webhook(
         saved_files.append(result["local_path"])
         if result.get("remote_path"):
             remote_files.append(result["remote_path"])
+
+        # --- Auto-index into local songs.json for immediate library availability ---
+        from .api import _load_songs, _save_songs
+
+        songs = _load_songs()
+        raw_title = Path(file.filename or "").stem.replace("_", " ").replace("-", " ")
+        title = raw_title.strip() or "Untitled"
+        song_id = str(uuid.uuid4())[:8]
+        storage_filename = result["local_path"].rsplit("/", 1)[-1]
+
+        song = {
+            "id": song_id,
+            "name": f"{title}{ext}",
+            "title": title,
+            "author": "Unknown",
+            "genre": None,
+            "rating": None,
+            "description": f"Uploaded via webhook on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+            "tags": [],
+            "duration": None,
+            "play_count": 0,
+            "last_played": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "filename": storage_filename,
+            "url": f"/api/music/{song_id}",
+            "size": result["size_bytes"],
+        }
+        songs.append(song)
+        _save_songs(songs)
+        logger.info("Auto-indexed webhook upload %s -> %s", storage_filename, song_id)
+
+        # --- Notify external FLAC Player backend if configured ---
+        base_url = str(settings.static_base_url).rstrip("/")
+        public_url = f"{base_url}/{result['local_path']}"
+        await register_song_with_flac_player(
+            filename=song["name"],
+            public_url=public_url,
+            title=title,
+            author="Unknown",
+        )
 
     # TODO: Add handling for "save_playlist" and "save_metadata" (JSON only)
 

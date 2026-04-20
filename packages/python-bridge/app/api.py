@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
+from .flac_client import register_song_with_flac_player
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/api", tags=["api"])
@@ -888,7 +889,17 @@ async def upload_song(
     songs = _load_songs()
     songs.append(song)
     _save_songs(songs)
-    
+
+    # Notify external FLAC Player backend if configured
+    base_url = str(settings.static_base_url).rstrip("/")
+    public_url = f"{base_url}/audio/music/{storage_filename}"
+    await register_song_with_flac_player(
+        filename=song["name"],
+        public_url=public_url,
+        title=title,
+        author=author,
+    )
+
     return {
         "success": True,
         "song": song,
