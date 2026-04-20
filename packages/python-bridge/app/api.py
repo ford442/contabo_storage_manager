@@ -723,6 +723,32 @@ async def trash_song(song_id: str):
     return {"success": True}
 
 
+@api_router.delete("/songs/{song_id}")
+async def delete_song(song_id: str):
+    """Permanently delete a song and its audio file."""
+    songs = _load_songs()
+    song = next((s for s in songs if s.get("id") == song_id), None)
+    if not song:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    # Remove from index
+    songs = [s for s in songs if s.get("id") != song_id]
+    _save_songs(songs)
+    
+    # Try to delete the audio file if it exists locally
+    filename = song.get("filename")
+    if filename:
+        base = Path(settings.files_dir)
+        audio_path = base / "audio" / "music" / filename
+        try:
+            if audio_path.exists():
+                audio_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to delete audio file %s: %s", audio_path, exc)
+    
+    return {"success": True, "deleted": song_id}
+
+
 @api_router.get("/music/{song_id}")
 async def stream_music_file(song_id: str):
     """Stream a music file by song ID."""
