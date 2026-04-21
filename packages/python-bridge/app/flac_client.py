@@ -15,7 +15,7 @@ async def register_song_with_flac_player(
     public_url: str,
     title: Optional[str] = None,
     author: str = "Noah",
-    tags: Optional[list] = None,
+    tags: Optional[list[str]] = None,
     genre: Optional[str] = None,
     duration: Optional[float] = None,
     filename_on_storage: Optional[str] = None,
