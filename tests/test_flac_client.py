@@ -32,9 +32,9 @@ async def test_register_song_forwards_extended_metadata(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, json):
+        async def post(self, url, **kwargs):
             captured["url"] = url
-            captured["payload"] = json
+            captured["payload"] = kwargs["json"]
             return FakeResponse()
 
     monkeypatch.setattr(flac_client.settings, "flac_player_api_url", "https://flac.example/api/upload/songs")

@@ -54,11 +54,11 @@ async def register_song_with_flac_player(
     }
     if tags is not None:
         payload["tags"] = tags
-    if genre:
+    if genre is not None:
         payload["genre"] = genre
     if duration is not None:
         payload["duration"] = duration
-    if filename_on_storage:
+    if filename_on_storage is not None:
         payload["filename"] = filename_on_storage
 
     try:
