@@ -1,7 +1,6 @@
 """Async client for registering uploaded songs with an external FLAC Player backend."""
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -13,14 +12,14 @@ logger = logging.getLogger(__name__)
 async def register_song_with_flac_player(
     filename: str,
     public_url: str,
-    title: Optional[str] = None,
+    title: str | None = None,
     author: str = "Noah",
     tags: Optional[list[str]] = None,
     genre: Optional[str] = None,
     duration: Optional[float] = None,
     filename_on_storage: Optional[str] = None,
     auto_enrich: bool = True,
-) -> Optional[dict]:
+) -> dict | None:
     """Send uploaded file metadata to the external FLAC Player backend.
 
     Args:
