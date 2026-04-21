@@ -14,10 +14,10 @@ async def register_song_with_flac_player(
     public_url: str,
     title: str | None = None,
     author: str = "Noah",
-    tags: list[str] | None = None,
-    genre: str | None = None,
-    duration: float | None = None,
-    filename_on_storage: str | None = None,
+    tags: Optional[list[str]] = None,
+    genre: Optional[str] = None,
+    duration: Optional[float] = None,
+    filename_on_storage: Optional[str] = None,
     auto_enrich: bool = True,
 ) -> dict | None:
     """Send uploaded file metadata to the external FLAC Player backend.
@@ -27,10 +27,10 @@ async def register_song_with_flac_player(
         public_url: Publicly accessible URL for the audio file.
         title: Song title. If None, derived from the filename.
         author: Artist / author name.
-        tags: Optional list of track tags.
-        genre: Optional track genre.
-        duration: Optional track duration in seconds.
-        filename_on_storage: Optional stored filename for the uploaded file.
+        tags: Optional list of tags to index on the FLAC Player side.
+        genre: Optional genre.
+        duration: Optional duration (seconds).
+        filename_on_storage: Optional storage filename for downstream indexing.
         auto_enrich: Whether the downstream backend should query MusicBrainz
             for extra metadata.
 
@@ -54,11 +54,11 @@ async def register_song_with_flac_player(
     }
     if tags is not None:
         payload["tags"] = tags
-    if genre is not None:
+    if genre:
         payload["genre"] = genre
     if duration is not None:
         payload["duration"] = duration
-    if filename_on_storage is not None:
+    if filename_on_storage:
         payload["filename"] = filename_on_storage
 
     try:

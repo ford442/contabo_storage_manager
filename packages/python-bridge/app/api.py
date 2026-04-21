@@ -931,6 +931,7 @@ async def upload_song(
     # Notify external FLAC Player backend if configured
     base_url = str(settings.static_base_url).rstrip("/")
     public_url = f"{base_url}/audio/music/{storage_filename}"
+    rounded_duration_sec = round(duration_sec, 2)
     await register_song_with_flac_player(
         filename=song["name"],
         public_url=public_url,
@@ -938,7 +939,7 @@ async def upload_song(
         author=author,
         tags=tag_list,
         genre=genre or None,
-        duration=round(duration_sec, 2),
+        duration=rounded_duration_sec,
         filename_on_storage=storage_filename,
     )
 

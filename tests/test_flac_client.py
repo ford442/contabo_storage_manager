@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +36,11 @@ async def test_register_song_forwards_extended_metadata(monkeypatch):
             captured["payload"] = kwargs["json"]
             return FakeResponse()
 
-    monkeypatch.setattr(flac_client.settings, "flac_player_api_url", "https://flac.example/api/upload/songs")
+    monkeypatch.setattr(
+        flac_client.settings,
+        "flac_player_api_url",
+        "https://flac.example/api/upload/songs",
+    )
     monkeypatch.setattr(flac_client.httpx, "AsyncClient", FakeAsyncClient)
 
     result = await flac_client.register_song_with_flac_player(
@@ -53,17 +56,26 @@ async def test_register_song_forwards_extended_metadata(monkeypatch):
 
     assert result == {"id": "song-123"}
     assert captured["url"] == "https://flac.example/api/upload/songs"
-    assert captured["payload"]["tags"] == ["rock", "upbeat"]
-    assert captured["payload"]["genre"] == "Rock"
-    assert captured["payload"]["duration"] == 182.5
-    assert captured["payload"]["filename"] == "abc.flac"
+
+    payload = captured["payload"]
+    assert payload["name"] == "My Song.flac"
+    assert payload["title"] == "My Song"
+    assert payload["author"] == "Artist"
+    assert payload["url"] == "https://storage.example/audio/music/abc.flac"
+    assert payload.get("auto_enrich") is True
+    assert payload["tags"] == ["rock", "upbeat"]
+    assert payload["genre"] == "Rock"
+    assert payload["duration"] == 182.5
+    assert payload["filename"] == "abc.flac"
 
 
 @pytest.mark.asyncio
 async def test_register_song_returns_none_when_url_not_configured(monkeypatch):
     monkeypatch.setattr(flac_client.settings, "flac_player_api_url", "")
+
     result = await flac_client.register_song_with_flac_player(
         filename="song.flac",
         public_url="https://storage.example/audio/music/song.flac",
     )
+
     assert result is None
