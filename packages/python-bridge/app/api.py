@@ -933,6 +933,10 @@ async def upload_song(
         public_url=public_url,
         title=title,
         author=author,
+        tags=tag_list,
+        genre=genre or None,
+        duration=round(duration_sec, 2),
+        filename_on_storage=storage_filename,
     )
 
     return {
