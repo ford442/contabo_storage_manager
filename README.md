@@ -257,6 +257,7 @@ Copy `.env.example` to `.env` and adjust the values.
 | `PYTHON_PORT` | `8000` | Port for FastAPI service |
 | `NODE_PORT` | `3000` | Port for Express service |
 | `CORS_ORIGINS` | `*` | Comma-separated CORS origins, or `*` for all |
+| `CORS_ORIGIN_REGEX` | *(built-in default)* | Regex fallback for trusted browser origins like `*.1ink.us`, `*.noahcohn.com`, and localhost |
 | `FILES_DIR` | `/home/ftpbridge/files` | Local volume mount path inside container |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `LOG_FILE` | `/var/log/ftpbridge/app.log` | Log file path |

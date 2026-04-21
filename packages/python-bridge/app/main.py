@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from .config import settings
+from .cors import build_cors_middleware_options
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 from .webhooks import webhook_router, files_router
@@ -43,31 +44,16 @@ app = FastAPI(
 )
 
 # Enhanced CORS middleware - MUST be added before routers
-ALLOWED_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
-
 # CORSMiddleware must ALWAYS be installed so OPTIONS preflights are intercepted
 # at the middleware layer. Without it, router paths return 405 before the
 # catch-all @app.options route is reached.
-if "*" in ALLOWED_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-        max_age=86400,
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-        max_age=86400,
-    )
+app.add_middleware(
+    CORSMiddleware,
+    **build_cors_middleware_options(
+        settings.cors_origins,
+        settings.cors_origin_regex,
+    ),
+)
 
 @app.on_event("startup")
 async def startup_event():

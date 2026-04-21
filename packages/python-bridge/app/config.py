@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: str = "https://code.noahcohn.com,https://storage.noahcohn.com,https://noahcohn.com,https://test.1ink.us,http://localhost:3000,http://localhost:5173,http://localhost:8000"
+    cors_origin_regex: str = (
+        r"^https://([a-z0-9-]+\.)?(1ink\.us|noahcohn\.com)$|^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+    )
 
     # Polling settings
     external_api_url: Optional[str] = None
