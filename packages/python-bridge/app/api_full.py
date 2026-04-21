@@ -140,6 +140,8 @@ ALLOWED_ORIGINS = [
     "https://test.1ink.us",
     "https://go.1ink.us",
     "https://noahcohn.com",
+    "https://storage.noahcohn.com",
+    "https://code.noahcohn.com",
 ]
 
 app.add_middleware(
