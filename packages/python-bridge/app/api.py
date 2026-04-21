@@ -929,11 +929,17 @@ async def upload_song(
     base_url = str(settings.static_base_url).rstrip("/")
     public_url = f"{base_url}/audio/music/{storage_filename}"
     await register_song_with_flac_player(
-        filename=song["name"],
-        public_url=public_url,
-        title=title,
-        author=author,
-    )
+    filename=song["name"],
+    public_url=public_url,
+    title=title,
+    author=author,
+    tags=tag_list,
+    genre=genre or None,
+    duration=round(duration_sec, 2) if duration_sec is not None else None,
+    filename_on_storage=storage_filename,
+    auto_enrich=True,
+)
+
 
     return {
         "success": True,
