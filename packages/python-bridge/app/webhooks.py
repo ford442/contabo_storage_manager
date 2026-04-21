@@ -213,9 +213,9 @@ async def flac_webhook(
             public_url=public_url,
             title=title,
             author="Unknown",
-            tags=song.get("tags", []),
-            genre=song.get("genre"),
-            duration=song.get("duration"),
+            tags=song["tags"],
+            genre=song["genre"],
+            duration=round(song["duration"], 2) if song["duration"] is not None else None,
             filename_on_storage=storage_filename,
         )
 
