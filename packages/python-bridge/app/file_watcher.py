@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,10 @@ class FileWatcherHandler(FileSystemEventHandler):
 
 def _handle_new_audio(path: Path):
     """Auto-index a new audio file into songs.json."""
+    
+    # Give api.py time to write the JSON metadata first
+    time.sleep(2)
+    
     try:
         # Delayed import to avoid circular imports at module load time
         from .api import _load_songs, _save_songs
