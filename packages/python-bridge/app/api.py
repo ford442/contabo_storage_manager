@@ -550,8 +550,8 @@ def _save_songs(songs: List[dict]):
 async def list_songs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    rating_gte: Optional[int] = Query(None, ge=1, le=10),
-    rating_lt: Optional[int] = Query(None, ge=1, le=10),
+    rating_gte: Optional[int] = Query(None, ge=0, le=10),
+    rating_lt: Optional[int] = Query(None, ge=0, le=10),
     tags: Optional[str] = Query(None),
     untagged: bool = Query(False),
     search: Optional[str] = Query(None),
