@@ -1075,6 +1075,160 @@ async def get_share(share_id: str):
     return ShareGetResponse(title=share.get("title", "Shared Playlist"), tracks=tracks)
 
 
+# ====================== Playlist Management ======================
+
+class Playlist(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    track_ids: List[str]
+    created_at: str
+    updated_at: str
+
+
+class PlaylistCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    track_ids: List[str] = []
+
+
+class PlaylistUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    track_ids: Optional[List[str]] = None
+
+
+def _get_playlists_file() -> Path:
+    """Get the playlists JSON file path."""
+    base = Path(settings.files_dir)
+    playlists_file = base / "playlists.json"
+    return playlists_file
+
+
+def _load_playlists() -> dict:
+    """Load playlists from JSON file."""
+    playlists_file = _get_playlists_file()
+    if not playlists_file.exists():
+        return {}
+    try:
+        with open(playlists_file, "r") as f:
+            data = json.load(f)
+            return data.get("playlists", {}) if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _save_playlists(playlists: dict):
+    """Save playlists to JSON file."""
+    playlists_file = _get_playlists_file()
+    playlists_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(playlists_file, "w") as f:
+        json.dump({"playlists": playlists}, f, indent=2)
+
+
+@api_router.get("/playlists", response_model=List[Playlist])
+async def list_playlists():
+    """List all playlists."""
+    playlists = _load_playlists()
+    return [
+        Playlist(
+            id=pid,
+            title=p.get("title", "Untitled"),
+            description=p.get("description"),
+            track_ids=p.get("track_ids", []),
+            created_at=p.get("created_at", ""),
+            updated_at=p.get("updated_at", "")
+        )
+        for pid, p in playlists.items()
+    ]
+
+
+@api_router.post("/playlists", response_model=Playlist)
+async def create_playlist(request: PlaylistCreate):
+    """Create a new playlist."""
+    playlists = _load_playlists()
+    playlist_id = str(uuid.uuid4())[:12]
+    now = datetime.now(timezone.utc).isoformat()
+    
+    playlists[playlist_id] = {
+        "title": request.title,
+        "description": request.description,
+        "track_ids": request.track_ids or [],
+        "created_at": now,
+        "updated_at": now
+    }
+    _save_playlists(playlists)
+    
+    return Playlist(
+        id=playlist_id,
+        title=request.title,
+        description=request.description,
+        track_ids=request.track_ids or [],
+        created_at=now,
+        updated_at=now
+    )
+
+
+@api_router.get("/playlists/{playlist_id}", response_model=Playlist)
+async def get_playlist(playlist_id: str):
+    """Get a specific playlist."""
+    playlists = _load_playlists()
+    p = playlists.get(playlist_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    
+    return Playlist(
+        id=playlist_id,
+        title=p.get("title", "Untitled"),
+        description=p.get("description"),
+        track_ids=p.get("track_ids", []),
+        created_at=p.get("created_at", ""),
+        updated_at=p.get("updated_at", "")
+    )
+
+
+@api_router.patch("/playlists/{playlist_id}", response_model=Playlist)
+async def update_playlist(playlist_id: str, request: PlaylistUpdate):
+    """Update a playlist."""
+    playlists = _load_playlists()
+    p = playlists.get(playlist_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    
+    # Update fields if provided
+    if request.title is not None:
+        p["title"] = request.title
+    if request.description is not None:
+        p["description"] = request.description
+    if request.track_ids is not None:
+        p["track_ids"] = request.track_ids
+    
+    p["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_playlists(playlists)
+    
+    return Playlist(
+        id=playlist_id,
+        title=p.get("title", "Untitled"),
+        description=p.get("description"),
+        track_ids=p.get("track_ids", []),
+        created_at=p.get("created_at", ""),
+        updated_at=p.get("updated_at", "")
+    )
+
+
+@api_router.delete("/playlists/{playlist_id}")
+async def delete_playlist(playlist_id: str):
+    """Delete a playlist."""
+    playlists = _load_playlists()
+    if playlist_id not in playlists:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    
+    del playlists[playlist_id]
+    _save_playlists(playlists)
+    
+    return {"success": True, "message": "Playlist deleted"}
+
+
 @api_router.get("/health")
 async def health_check():
     """Health check endpoint."""

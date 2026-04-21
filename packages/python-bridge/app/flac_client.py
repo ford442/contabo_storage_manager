@@ -1,6 +1,7 @@
 """Async client for registering uploaded songs with an external FLAC Player backend."""
 
 import logging
+from typing import Optional
 
 import httpx
 
