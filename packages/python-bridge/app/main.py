@@ -69,23 +69,6 @@ else:
         max_age=86400,
     )
 
-# Explicit OPTIONS handler for all paths (handles preflight at nginx level too)
-@app.options("/{path:path}")
-async def handle_options(path: str, request: Request):
-    """Handle CORS preflight requests for all paths."""
-    origin = request.headers.get("origin", "*")
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": origin if origin else "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-            "Access-Control-Allow-Headers": "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization,X-Hub-Signature-256",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "86400",
-            "Vary": "Origin",
-        }
-    )
-
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting file watcher for %s", settings.files_dir)
