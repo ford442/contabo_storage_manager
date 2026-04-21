@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .flac_client import register_song_with_flac_player
+from pydub import AudioSegment
+from pydub.exceptions import CouldntDecodeError
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/api", tags=["api"])
@@ -843,74 +845,81 @@ async def upload_song(
     tags: str = Form(""),
 ):
     """Upload a music file (MP3, FLAC, WAV, OGG) and add it to the songs library.
-    
-    Args:
-        file: The audio file to upload
-        title: Song title
-        author: Artist name
-        genre: Music genre
-        description: Optional description
-        tags: Comma-separated list of tags
-    
-    Returns:
-        The created song metadata
+
+    This endpoint always converts uploaded audio to high-quality FLAC using
+    pydub/ffmpeg and stores the result under audio/music/. It then indexes
+    the song in songs.json and notifies the external FLAC player backend if configured.
     """
     # Validate file extension
     filename = file.filename or ""
     ext = Path(filename).suffix.lower()
     allowed_exts = ['.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac']
-    
+
     if ext not in allowed_exts:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Invalid file type. Allowed: {', '.join(allowed_exts)}"
         )
-    
-    # Generate unique ID and filename
+
+    # Generate unique ID and target filename (always .flac)
     song_id = str(uuid.uuid4())[:8]
     safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
     safe_title = safe_title.replace(' ', '_') or "untitled"
-    storage_filename = f"{song_id}_{safe_title}{ext}"
-    
-    # Get the music directory
+    storage_filename = f"{song_id}_{safe_title}.flac"
+
+    # Prepare directories
     base = Path(settings.files_dir)
     music_dir = base / "audio" / "music"
     music_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Read and save file
+
+    # Read uploaded content to temp file first
+    temp_path = Path("/tmp") / f"{uuid.uuid4()}_{filename}"
     content = await file.read()
     max_bytes = settings.max_upload_mb * 1024 * 1024
     if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413, 
-            detail=f"File exceeds {settings.max_upload_mb} MB limit"
-        )
-    
-    dest = music_dir / storage_filename
-    dest.write_bytes(content)
-    
+        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit")
+    temp_path.write_bytes(content)
+
+    try:
+        try:
+            audio = AudioSegment.from_file(str(temp_path))
+        except CouldntDecodeError:
+            raise HTTPException(status_code=400, detail="Could not decode file. Is ffmpeg installed on the server?")
+
+        # Export to high-quality FLAC
+        dest = music_dir / storage_filename
+        audio.export(dest, format="flac", parameters=["-compression_level", "8"])
+        duration_sec = len(audio) / 1000.0
+        size_bytes = dest.stat().st_size if dest.exists() else len(content)
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            pass
+
     # Parse tags
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-    
+
     # Create song entry
     song = {
         "id": song_id,
-        "name": f"{title}{ext}",
+        "name": f"{title}.flac",
         "title": title,
         "author": author,
         "genre": genre or None,
         "rating": None,
         "description": description or f"Uploaded on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
         "tags": tag_list,
-        "duration": None,  # Could extract from MP3 metadata
+        "duration": round(duration_sec, 2),
         "play_count": 0,
         "last_played": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": storage_filename,
         "url": f"/api/music/{song_id}",
-        "size": len(content)
+        "size": size_bytes,
     }
-    
+
     # Add to songs index
     songs = _load_songs()
     songs.append(song)
