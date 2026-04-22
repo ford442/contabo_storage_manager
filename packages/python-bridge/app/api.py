@@ -8,8 +8,8 @@ from typing import List, Optional, Union
 
 import os
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Request
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
@@ -1011,10 +1011,13 @@ async def create_share(request: ShareCreateRequest):
     for tid in request.track_ids:
         song = track_map.get(tid)
         if song:
-            # Ensure url is present
-            if not song.get("url") and song.get("filename"):
+            # Ensure absolute URL
+            url = song.get("url")
+            if not url and song.get("filename"):
                 base_url = str(settings.static_base_url).rstrip("/")
                 song["url"] = f"{base_url}/audio/music/{song['filename']}"
+            elif url and url.startswith("/"):
+                song["url"] = f"https://storage.noahcohn.com{url}"
             tracks.append(song)
 
     if not tracks:
@@ -1040,8 +1043,7 @@ async def create_share(request: ShareCreateRequest):
     }
     _save_shares(shares)
 
-    base_url = str(settings.static_base_url).rstrip("/").removesuffix("/files")
-    full_url = f"{base_url}/api/share/{share_id}"
+    full_url = f"https://test.1ink.us/flac-player?share={share_id}"
 
     return ShareCreateResponse(
         share_id=share_id,
@@ -1051,9 +1053,10 @@ async def create_share(request: ShareCreateRequest):
     )
 
 
-@api_router.get("/share/{share_id}", response_model=ShareGetResponse)
-async def get_share(share_id: str):
-    """Retrieve a shared playlist by ID."""
+@api_router.get("/share/{share_id}")
+async def get_share(share_id: str, request: Request):
+    """Retrieve a shared playlist by ID. Returns JSON for API clients,
+    or redirects to the FLAC player web app for browsers."""
     shares = _load_shares()
     share = shares.get(share_id)
     if not share:
@@ -1069,12 +1072,20 @@ async def get_share(share_id: str):
         except ValueError:
             pass
 
+    # Browser redirect — if Accept header prefers HTML, send user to player
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        return RedirectResponse(url=f"https://test.1ink.us/flac-player?share={share_id}")
+
     tracks = share.get("tracks", [])
-    # Enrich URLs if missing
+    # Ensure absolute URLs
     base_url = str(settings.static_base_url).rstrip("/")
     for t in tracks:
-        if not t.get("url") and t.get("filename"):
+        url = t.get("url")
+        if not url and t.get("filename"):
             t["url"] = f"{base_url}/audio/music/{t['filename']}"
+        elif url and url.startswith("/"):
+            t["url"] = f"https://storage.noahcohn.com{url}"
 
     return ShareGetResponse(title=share.get("title", "Shared Playlist"), tracks=tracks)
 
