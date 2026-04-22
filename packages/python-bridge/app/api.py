@@ -601,11 +601,15 @@ async def list_songs(
     else:  # date
         songs.sort(key=lambda s: s.get("created_at", s.get("date", "")), reverse=reverse)
     
-    # Add URLs if missing
+    # Ensure absolute URLs
     base_url = str(settings.static_base_url).rstrip("/")
+    api_base = "https://storage.noahcohn.com"
     for song in songs:
-        if not song.get("url") and song.get("filename"):
+        url = song.get("url")
+        if not url and song.get("filename"):
             song["url"] = f"{base_url}/audio/music/{song['filename']}"
+        elif url and url.startswith("/"):
+            song["url"] = f"{api_base}{url}"
     
     # Apply pagination
     total = len(songs)
@@ -919,7 +923,7 @@ async def upload_song(
         "last_played": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": storage_filename,
-        "url": f"/api/music/{song_id}",
+        "url": f"https://storage.noahcohn.com/api/music/{song_id}",
         "size": size_bytes,
     }
 
@@ -1113,7 +1117,11 @@ def _load_playlists() -> dict:
     try:
         with open(playlists_file, "r") as f:
             data = json.load(f)
-            return data.get("playlists", {}) if isinstance(data, dict) else {}
+            playlists = data.get("playlists", {}) if isinstance(data, dict) else {}
+            if isinstance(playlists, list):
+                # Normalize legacy list format to dict keyed by id
+                return {p.get("id", str(uuid.uuid4())[:12]): p for p in playlists}
+            return playlists
     except (json.JSONDecodeError, IOError):
         return {}
 
