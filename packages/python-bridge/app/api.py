@@ -484,7 +484,7 @@ class SongMetadata(BaseModel):
     rating: Optional[int] = Field(None, ge=1, le=10)
     description: Optional[str] = None
     tags: List[str] = []
-    duration: Optional[int] = None
+    duration: Optional[float] = None
     play_count: int = 0
     last_played: Optional[str] = None
     created_at: Optional[str] = None
@@ -890,7 +890,7 @@ async def upload_song(
     try:
         try:
             audio = AudioSegment.from_file(str(temp_path))
-        except CouldntDecodeError:
+        except (CouldntDecodeError, FileNotFoundError):
             raise HTTPException(status_code=400, detail="Could not decode file. Is ffmpeg installed on the server?")
 
         # Export to high-quality FLAC
