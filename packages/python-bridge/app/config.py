@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     # Local storage (mounted from host)
     files_dir: str = "/data/files"
 
+    # MilkDrop preset directories base (milk/, milkSML/, milkMED/, milkLRG/, custom_milk/)
+    presets_dir: str = "/data/files"
+
     # Webhook security
     webhook_secret: Optional[str] = None
 
