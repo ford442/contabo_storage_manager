@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .config import settings
+from .ftp_client import StorageFTPClient
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +124,17 @@ async def list_mods(
 
 @mod_router.get("/scan", response_model=ScanResult)
 async def scan_mods():
-    """Scan the mods directory on disk and refresh the index.
+    """Sync MOD files from remote FTP, then scan the mods directory and refresh the index.
 
     Called by the cloud_notes Sync button to discover new files from storage.
     """
+    # Pull new files from the configured FTP/SFTP server first
+    try:
+        ftp_client = StorageFTPClient()
+        ftp_client.sync_mods_from_remote(_mods_dir())
+    except Exception as exc:
+        logger.error("FTP sync during scan failed: %s", exc)
+
     mods_dir = _mods_dir()
     now = datetime.now(timezone.utc).isoformat()
 
