@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .flac_client import register_song_with_flac_player
+from . import presets
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
@@ -1246,6 +1247,44 @@ async def delete_playlist(playlist_id: str):
     _save_playlists(playlists)
     
     return {"success": True, "message": "Playlist deleted"}
+
+
+@api_router.post("/presets/rescan")
+async def rescan_presets():
+    """Rebuild cached indexes for all preset directories."""
+    counts = await presets.scan_presets()
+    return {
+        "success": True,
+        "dirs": counts,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api_router.get("/presets/random")
+async def get_random_preset(dir: Optional[str] = Query("any")):
+    """Return a random preset from the cached index.
+
+    Query param `dir` can be: milk, milkLRG, milkMED, milkSML, custom_milk, or any.
+    """
+    # Auto-load index on first request if not already in memory
+    if not presets._preset_index:
+        presets.load_index()
+
+    result = presets.get_random_preset(dir_name=dir if dir != "any" else None)
+    if not result:
+        raise HTTPException(
+            status_code=503,
+            detail="Preset index is empty. Run POST /api/presets/rescan first.",
+        )
+    return result
+
+
+@api_router.get("/presets/stats")
+async def get_preset_stats():
+    """Return current preset index statistics."""
+    if not presets._preset_index:
+        presets.load_index()
+    return presets.get_index_stats()
 
 
 @api_router.get("/health")
