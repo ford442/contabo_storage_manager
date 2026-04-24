@@ -8,13 +8,12 @@ from typing import List, Optional, Union
 
 import os
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Request
-from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
+from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
 from .flac_client import register_song_with_flac_player
-from . import presets
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
@@ -485,7 +484,7 @@ class SongMetadata(BaseModel):
     rating: Optional[int] = Field(None, ge=1, le=10)
     description: Optional[str] = None
     tags: List[str] = []
-    duration: Optional[float] = None
+    duration: Optional[int] = None
     play_count: int = 0
     last_played: Optional[str] = None
     created_at: Optional[str] = None
@@ -602,15 +601,11 @@ async def list_songs(
     else:  # date
         songs.sort(key=lambda s: s.get("created_at", s.get("date", "")), reverse=reverse)
     
-    # Ensure absolute URLs
+    # Add URLs if missing
     base_url = str(settings.static_base_url).rstrip("/")
-    api_base = "https://storage.noahcohn.com"
     for song in songs:
-        url = song.get("url")
-        if not url and song.get("filename"):
+        if not song.get("url") and song.get("filename"):
             song["url"] = f"{base_url}/audio/music/{song['filename']}"
-        elif url and url.startswith("/"):
-            song["url"] = f"{api_base}{url}"
     
     # Apply pagination
     total = len(songs)
@@ -891,7 +886,7 @@ async def upload_song(
     try:
         try:
             audio = AudioSegment.from_file(str(temp_path))
-        except (CouldntDecodeError, FileNotFoundError):
+        except CouldntDecodeError:
             raise HTTPException(status_code=400, detail="Could not decode file. Is ffmpeg installed on the server?")
 
         # Export to high-quality FLAC
@@ -924,7 +919,7 @@ async def upload_song(
         "last_played": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": storage_filename,
-        "url": f"https://storage.noahcohn.com/api/music/{song_id}",
+        "url": f"/api/music/{song_id}",
         "size": size_bytes,
     }
 
@@ -938,17 +933,15 @@ async def upload_song(
     public_url = f"{base_url}/audio/music/{storage_filename}"
     rounded_duration_sec = round(duration_sec, 2)
     await register_song_with_flac_player(
-    filename=song["name"],
-    public_url=public_url,
-    title=title,
-    author=author,
-    tags=tag_list,
-    genre=genre or None,
-    duration=round(duration_sec, 2) if duration_sec is not None else None,
-    filename_on_storage=storage_filename,
-    auto_enrich=True,
-)
-
+        filename=song["name"],
+        public_url=public_url,
+        title=title,
+        author=author,
+        tags=tag_list,
+        genre=genre or None,
+        duration=rounded_duration_sec,
+        filename_on_storage=storage_filename,
+    )
 
     return {
         "success": True,
@@ -1014,13 +1007,10 @@ async def create_share(request: ShareCreateRequest):
     for tid in request.track_ids:
         song = track_map.get(tid)
         if song:
-            # Ensure absolute URL
-            url = song.get("url")
-            if not url and song.get("filename"):
+            # Ensure url is present
+            if not song.get("url") and song.get("filename"):
                 base_url = str(settings.static_base_url).rstrip("/")
                 song["url"] = f"{base_url}/audio/music/{song['filename']}"
-            elif url and url.startswith("/"):
-                song["url"] = f"https://storage.noahcohn.com{url}"
             tracks.append(song)
 
     if not tracks:
@@ -1046,7 +1036,8 @@ async def create_share(request: ShareCreateRequest):
     }
     _save_shares(shares)
 
-    full_url = f"https://test.1ink.us/flac-player?share={share_id}"
+    base_url = str(settings.static_base_url).rstrip("/").removesuffix("/files")
+    full_url = f"{base_url}/api/share/{share_id}"
 
     return ShareCreateResponse(
         share_id=share_id,
@@ -1056,10 +1047,9 @@ async def create_share(request: ShareCreateRequest):
     )
 
 
-@api_router.get("/share/{share_id}")
-async def get_share(share_id: str, request: Request):
-    """Retrieve a shared playlist by ID. Returns JSON for API clients,
-    or redirects to the FLAC player web app for browsers."""
+@api_router.get("/share/{share_id}", response_model=ShareGetResponse)
+async def get_share(share_id: str):
+    """Retrieve a shared playlist by ID."""
     shares = _load_shares()
     share = shares.get(share_id)
     if not share:
@@ -1075,20 +1065,12 @@ async def get_share(share_id: str, request: Request):
         except ValueError:
             pass
 
-    # Browser redirect — if Accept header prefers HTML, send user to player
-    accept = request.headers.get("accept", "")
-    if "text/html" in accept and "application/json" not in accept:
-        return RedirectResponse(url=f"https://test.1ink.us/flac-player?share={share_id}")
-
     tracks = share.get("tracks", [])
-    # Ensure absolute URLs
+    # Enrich URLs if missing
     base_url = str(settings.static_base_url).rstrip("/")
     for t in tracks:
-        url = t.get("url")
-        if not url and t.get("filename"):
+        if not t.get("url") and t.get("filename"):
             t["url"] = f"{base_url}/audio/music/{t['filename']}"
-        elif url and url.startswith("/"):
-            t["url"] = f"https://storage.noahcohn.com{url}"
 
     return ShareGetResponse(title=share.get("title", "Shared Playlist"), tracks=tracks)
 
@@ -1131,11 +1113,7 @@ def _load_playlists() -> dict:
     try:
         with open(playlists_file, "r") as f:
             data = json.load(f)
-            playlists = data.get("playlists", {}) if isinstance(data, dict) else {}
-            if isinstance(playlists, list):
-                # Normalize legacy list format to dict keyed by id
-                return {p.get("id", str(uuid.uuid4())[:12]): p for p in playlists}
-            return playlists
+            return data.get("playlists", {}) if isinstance(data, dict) else {}
     except (json.JSONDecodeError, IOError):
         return {}
 
@@ -1249,44 +1227,6 @@ async def delete_playlist(playlist_id: str):
     _save_playlists(playlists)
     
     return {"success": True, "message": "Playlist deleted"}
-
-
-@api_router.post("/presets/rescan")
-async def rescan_presets():
-    """Rebuild cached indexes for all preset directories."""
-    counts = await presets.scan_presets()
-    return {
-        "success": True,
-        "dirs": counts,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@api_router.get("/presets/random")
-async def get_random_preset(dir: Optional[str] = Query("any")):
-    """Return a random preset from the cached index.
-
-    Query param `dir` can be: milk, milkLRG, milkMED, milkSML, custom_milk, or any.
-    """
-    # Auto-load index on first request if not already in memory
-    if not presets._preset_index:
-        presets.load_index()
-
-    result = presets.get_random_preset(dir_name=dir if dir != "any" else None)
-    if not result:
-        raise HTTPException(
-            status_code=503,
-            detail="Preset index is empty. Run POST /api/presets/rescan first.",
-        )
-    return result
-
-
-@api_router.get("/presets/stats")
-async def get_preset_stats():
-    """Return current preset index statistics."""
-    if not presets._preset_index:
-        presets.load_index()
-    return presets.get_index_stats()
 
 
 @api_router.get("/health")

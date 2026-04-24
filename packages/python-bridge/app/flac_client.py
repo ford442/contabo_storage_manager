@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def register_song_with_flac_player(
     filename: str,
     public_url: str,
-    title: Optional[str] = None,
+    title: str | None = None,
     author: str = "Noah",
     tags: Optional[list] = None,
     genre: Optional[str] = None,
@@ -43,6 +43,14 @@ async def register_song_with_flac_player(
         "url": public_url,
         "auto_enrich": auto_enrich,
     }
+    if tags is not None:
+        payload["tags"] = tags
+    if genre:
+        payload["genre"] = genre
+    if duration is not None:
+        payload["duration"] = duration
+    if filename_on_storage:
+        payload["filename"] = filename_on_storage
 
     # Include optional fields if provided
     if tags:
@@ -55,11 +63,13 @@ async def register_song_with_flac_player(
         payload["filename"] = filename_on_storage
 
     try:
+        logger.debug("Registering song with FLAC Player payload=%s", payload)
         async with httpx.AsyncClient(timeout=30.0) as client:
             logger.debug("FLAC registration POST %s payload=%s", url, payload)
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
+            logger.debug("FLAC Player registration response=%s", data)
             logger.info(
                 "Successfully registered %s with FLAC Player (ID: %s)",
                 filename,

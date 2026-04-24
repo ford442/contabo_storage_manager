@@ -22,6 +22,8 @@ from .sequencer_router import sequencer_router
 from .vps_browser_router import vps_browser_router
 from .notes_router import notes_router
 from .pachinball_router import pachinball_router
+from .mod_router import mod_router
+from .presets_router import presets_router
 from .file_watcher import start_watching
 
 
@@ -73,6 +75,8 @@ app.include_router(sequencer_router)    # ← Sequencer endpoints for songs/patt
 app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 app.include_router(notes_router)        # ← Named notes endpoints
 app.include_router(pachinball_router)   # ← Pachinball game content endpoints (router already has /api prefix)
+app.include_router(mod_router)          # ← MOD music file endpoints (/api/mods)
+app.include_router(presets_router)      # ← MilkDrop preset endpoints (/api/presets)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():
@@ -110,7 +114,7 @@ async def media_gallery():
                     <h1 class="text-4xl font-semibold bg-gradient-to-r from-cyan-400 to-pink-500 bg-clip-text text-transparent">
                         storage.noahcohn.com
                     </h1>
-                    <p class="text-gray-500">Google Cloud • Media &amp; Shader Vault</p>
+                    <p class="text-gray-500">Google Cloud &bull; Media &amp; Shader Vault</p>
                 </div>
                 <div class="flex gap-4">
                     <button onclick="uploadFile()" 
