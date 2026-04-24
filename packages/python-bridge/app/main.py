@@ -23,6 +23,7 @@ from .vps_browser_router import vps_browser_router
 from .notes_router import notes_router
 from .pachinball_router import pachinball_router
 from .mod_router import mod_router
+from .presets_router import presets_router
 from .file_watcher import start_watching
 
 
@@ -75,6 +76,7 @@ app.include_router(vps_browser_router)  # ← VPS file browser endpoints
 app.include_router(notes_router)        # ← Named notes endpoints
 app.include_router(pachinball_router)   # ← Pachinball game content endpoints (router already has /api prefix)
 app.include_router(mod_router)          # ← MOD music file endpoints (/api/mods)
+app.include_router(presets_router)      # ← MilkDrop preset endpoints (/api/presets)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():
