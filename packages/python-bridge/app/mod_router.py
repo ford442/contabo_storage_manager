@@ -5,6 +5,11 @@ import json
 import os
 from pathlib import Path
 
+from .config import settings
+from .ftp_client import StorageFTPClient
+
+logger = logging.getLogger(__name__)
+
 mod_router = APIRouter(prefix="/api/mods", tags=["mods"])
 
 MOD_EXTENSIONS = frozenset({
@@ -90,6 +95,17 @@ async def list_mods(search: Optional[str] = None, tag: Optional[str] = None):
 @mod_router.get("/scan", response_model=ScanResult)
 async def scan_mods():
     """Scan FILES_DIR/mods/ and update the index."""
+    """Sync MOD files from remote FTP, then scan the mods directory and refresh the index.
+
+    Called by the cloud_notes Sync button to discover new files from storage.
+    """
+    # Pull new files from the configured FTP/SFTP server first
+    try:
+        ftp_client = StorageFTPClient()
+        ftp_client.sync_mods_from_remote(_mods_dir())
+    except Exception as exc:
+        logger.error("FTP sync during scan failed: %s", exc)
+
     mods_dir = _mods_dir()
     index = _load_index()
     

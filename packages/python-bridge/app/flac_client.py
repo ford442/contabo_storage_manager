@@ -10,34 +10,24 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
+
 async def register_song_with_flac_player(
     filename: str,
     public_url: str,
     title: str | None = None,
     author: str = "Noah",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list] = None,
     genre: Optional[str] = None,
     duration: Optional[float] = None,
     filename_on_storage: Optional[str] = None,
     auto_enrich: bool = True,
-) -> dict | None:
-    """Send uploaded file metadata to the external FLAC Player backend.
+) -> Optional[dict]:
+    """
+    Send uploaded file metadata to the external FLAC Player backend.
 
-    Args:
-        filename: Original filename (including extension).
-        public_url: Publicly accessible URL for the audio file.
-        title: Song title. If None, derived from the filename.
-        author: Artist / author name.
-        tags: Optional list of tags to index on the FLAC Player side.
-        genre: Optional genre.
-        duration: Optional duration (seconds).
-        filename_on_storage: Optional storage filename for downstream indexing.
-        auto_enrich: Whether the downstream backend should query MusicBrainz
-            for extra metadata.
-
-    Returns:
-        Parsed JSON response from the backend, or None if the call failed
-        or no backend URL is configured.
+    Code
+    Now includes tags, genre, duration and storage filename so the FLAC Player
+    receives full metadata to index into its library.
     """
     url = settings.flac_player_api_url
     if not url:
@@ -62,9 +52,20 @@ async def register_song_with_flac_player(
     if filename_on_storage:
         payload["filename"] = filename_on_storage
 
+    # Include optional fields if provided
+    if tags:
+        payload["tags"] = tags
+    if genre:
+        payload["genre"] = genre
+    if duration is not None:
+        payload["duration"] = duration
+    if filename_on_storage:
+        payload["filename"] = filename_on_storage
+
     try:
         logger.debug("Registering song with FLAC Player payload=%s", payload)
         async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.debug("FLAC registration POST %s payload=%s", url, payload)
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -74,6 +75,7 @@ async def register_song_with_flac_player(
                 filename,
                 data.get("id"),
             )
+            logger.debug("FLAC registration response=%s", data)
             return data
     except httpx.HTTPStatusError as exc:
         logger.error(
@@ -89,3 +91,4 @@ async def register_song_with_flac_player(
             exc,
         )
     return None
+

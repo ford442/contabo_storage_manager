@@ -100,14 +100,14 @@ def _validate_filename(filename: str) -> None:
         raise HTTPException(
             status_code=400, detail=f"Only {MILK_SUFFIX} files are supported."
         )
-    # Restrict to safe characters: alphanumeric, spaces, dots, hyphens, underscores, parens
-    safe_chars = set(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-+()"
-    )
-    if not all(c in safe_chars for c in filename):
+    # Block control characters and Windows reserved chars to keep filenames safe
+    blocked_chars = set("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+                        "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
+                        "\x7f<>:\"|?*")
+    if any(c in blocked_chars for c in filename):
         raise HTTPException(
             status_code=400,
-            detail="Filename contains invalid characters. Use alphanumeric, spaces, and ._-+() only.",
+            detail="Filename contains invalid characters.",
         )
 
 
