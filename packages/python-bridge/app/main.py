@@ -25,6 +25,7 @@ from .pachinball_router import pachinball_router
 from .mod_router import mod_router
 from .presets_router import presets_router
 from .file_watcher import start_watching
+from . import presets
 
 
 # === SSH-POWERED ADMIN PANEL (SIMPLE VERSION - NO TEMPLATES) ===
@@ -61,6 +62,13 @@ app.add_middleware(
 async def startup_event():
     logger.info("Starting file watcher for %s", settings.files_dir)
     start_watching(settings.files_dir)
+    presets.load_index()
+    stats = presets.get_index_stats()
+    logger.info(
+        "Preset index on startup: %s presets across %s dirs",
+        stats.get("total", 0),
+        len(stats.get("dirs", {})),
+    )
 
 
 # Include routers

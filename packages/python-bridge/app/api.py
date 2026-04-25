@@ -2,6 +2,7 @@
 
 import json
 import logging
+import random
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Union
@@ -1415,8 +1416,8 @@ async def rescan_presets():
 
 
 @api_router.get("/presets/random")
-async def get_random_preset(dir: Optional[str] = Query("any")):
-    """Return a random preset from the cached index.
+async def get_random_preset(dir: Optional[str] = Query("any"), request: Request = None):
+    """Return a random preset from the cached index, falling back to local disk.
 
     Query param `dir` can be: milk, milkLRG, milkMED, milkSML, custom_milk, or any.
     """
@@ -1425,10 +1426,31 @@ async def get_random_preset(dir: Optional[str] = Query("any")):
         presets.load_index()
 
     result = presets.get_random_preset(dir_name=dir if dir != "any" else None)
+
+    # Fallback: scan local directories directly if cache is empty
+    if not result:
+        candidates = []
+        dirs_to_check = [dir] if dir != "any" else presets.PRESET_DIRS
+        for d in dirs_to_check:
+            if d not in presets.PRESET_DIRS:
+                continue
+            preset_dir = Path(settings.presets_dir) / d
+            if preset_dir.exists():
+                for f in preset_dir.glob("*.milk"):
+                    candidates.append((d, f.name))
+        if candidates:
+            chosen_dir, chosen_file = random.choice(candidates)
+            base = str(request.base_url).rstrip("/") if request else ""
+            result = {
+                "dir": chosen_dir,
+                "filename": chosen_file,
+                "url": f"{base}/api/presets/{chosen_dir}/{chosen_file}",
+            }
+
     if not result:
         raise HTTPException(
             status_code=503,
-            detail="Preset index is empty. Run POST /api/presets/rescan first.",
+            detail="Preset index is empty and no local presets found. Run POST /api/presets/rescan first.",
         )
     return result
 
