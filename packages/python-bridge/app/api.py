@@ -559,11 +559,14 @@ async def list_songs(
     sort_by: str = Query("date"),
     sort_desc: bool = Query(True),
     exclude_id: Optional[str] = Query(None),
+    type: Optional[str] = Query(None, description="Filter by entry type (e.g. 'video')"),
 ):
     """List all songs with filtering and sorting (flac_player compatible)."""
     songs = _load_songs()
     
     # Apply filters
+    if type is not None:
+        songs = [s for s in songs if s.get("type") == type]
     if rating_gte is not None:
         songs = [s for s in songs if (s.get("rating") or 0) >= rating_gte]
     if rating_lt is not None:
@@ -955,6 +958,155 @@ async def upload_song(
         "song": song,
         "message": f"Uploaded {filename} successfully"
     }
+
+
+# ====================== Video Upload API ======================
+
+def _extract_video_duration(path: Path) -> Optional[float]:
+    """Extract video duration in seconds using ffprobe."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return round(float(result.stdout.strip()), 2)
+    except Exception:
+        pass
+    return None
+
+
+@api_router.post("/videos/upload")
+async def upload_video(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    description: str = Form(""),
+    tags: str = Form(""),
+):
+    """Upload a video file (MP4, WebM, MOV) and index it for B3HD mode."""
+    filename = file.filename or ""
+    ext = Path(filename).suffix.lower()
+    allowed_exts = [".mp4", ".webm", ".mov", ".m4v"]
+
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {', '.join(allowed_exts)}"
+        )
+
+    video_id = str(uuid.uuid4())[:8]
+    safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()
+    safe_title = safe_title.replace(" ", "_") or "untitled"
+    storage_filename = f"{video_id}_{safe_title}{ext}"
+
+    base = Path(settings.files_dir)
+    videos_dir = base / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = videos_dir / storage_filename
+    content = await file.read()
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File exceeds {settings.max_upload_mb} MB limit")
+    dest.write_bytes(content)
+
+    duration_sec = _extract_video_duration(dest)
+    size_bytes = dest.stat().st_size
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
+    video_entry = {
+        "id": video_id,
+        "name": f"{title or safe_title}{ext}",
+        "title": title or safe_title,
+        "author": "Unknown",
+        "genre": None,
+        "rating": None,
+        "description": description or f"Uploaded on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+        "tags": tag_list,
+        "duration": duration_sec,
+        "play_count": 0,
+        "last_played": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "filename": storage_filename,
+        "url": f"https://storage.noahcohn.com/files/videos/{storage_filename}",
+        "size": size_bytes,
+        "type": "video",
+    }
+
+    songs = _load_songs()
+    songs.append(video_entry)
+    _save_songs(songs)
+
+    return {
+        "success": True,
+        "video": video_entry,
+        "message": f"Uploaded {filename} successfully",
+    }
+
+
+def _auto_index_videos():
+    """Scan the videos directory and auto-add unindexed files to songs.json."""
+    base = Path(settings.files_dir)
+    videos_dir = base / "videos"
+    if not videos_dir.exists():
+        return
+
+    songs = _load_songs()
+    existing_filenames = {s.get("filename") for s in songs if s.get("type") == "video"}
+
+    added = 0
+    for path in videos_dir.iterdir():
+        if not path.is_file():
+            continue
+        ext = path.suffix.lower()
+        if ext not in (".mp4", ".webm", ".mov", ".m4v"):
+            continue
+        if path.name in existing_filenames:
+            continue
+
+        video_id = str(uuid.uuid4())[:8]
+        raw_title = path.stem.replace("_", " ").replace("-", " ")
+        title = raw_title.strip() or "Untitled"
+        duration_sec = _extract_video_duration(path)
+
+        video_entry = {
+            "id": video_id,
+            "name": path.name,
+            "title": title,
+            "author": "Unknown",
+            "genre": None,
+            "rating": None,
+            "description": f"Auto-discovered on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+            "tags": [],
+            "duration": duration_sec,
+            "play_count": 0,
+            "last_played": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "filename": path.name,
+            "url": f"https://storage.noahcohn.com/files/videos/{path.name}",
+            "size": path.stat().st_size,
+            "type": "video",
+        }
+        songs.append(video_entry)
+        added += 1
+
+    if added:
+        _save_songs(songs)
+        logger.info(f"Auto-indexed {added} video(s) from {videos_dir}")
+
+
+# Run auto-index once at module load so existing files are picked up on restart.
+_auto_index_videos()
 
 
 # ====================== Share API ======================
