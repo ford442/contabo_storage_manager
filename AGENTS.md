@@ -27,6 +27,8 @@ Internet ──→ (nginx / Caddy / direct)
                │             ├── Adventure  → /api/adventure/*
                │             ├── VPS Browser → /api/vps/*
                │             ├── Models    → /models/* (Range/HEAD support for WebLLM)
+               │             ├── Mods      → /api/mods/* (MOD music files)
+               │             ├── Presets   → /api/presets/* (MilkDrop .milk files)
                │             ├── Static    → /files/{path}
                │             └── Remote    → /api/admin/run, /api/admin/logs/{task_id}
                │
@@ -57,28 +59,34 @@ The Python bridge serves a universal upload dashboard at `GET /admin`. It suppor
 - **Framework**: FastAPI 0.111+
 - **Server**: Uvicorn with standard workers (default 2)
 - **Key Dependencies**:
-  - `pydantic` / `pydantic-settings` for configuration
-  - `aiofiles` for async file operations
-  - `httpx` for HTTP client
-  - `python-multipart` for file uploads
-  - `paramiko` for SFTP connections
-  - `watchdog` for file-system watching
-  - `asyncssh` for remote admin commands
-  - `jinja2` for the admin panel template
+  - `fastapi` / `uvicorn[standard]` — web framework and ASGI server
+  - `pydantic` / `pydantic-settings` — configuration and request/response models
+  - `aiofiles` — async file I/O
+  - `httpx` — async HTTP client
+  - `python-multipart` — multipart form parsing
+  - `paramiko` — SFTP connections
+  - `asyncssh` — remote SSH command execution for admin panel
+  - `jinja2` — admin panel HTML templating
+  - `google-cloud-storage` — GCS bucket sync for music
+  - `watchdog` — filesystem watcher for auto-indexing audio files
+  - `pydub` — audio metadata extraction
+  - `aiocache` — caching layer
+  - `gunicorn` — production WSGI/ASGI worker alternative
 
 ### Node Bridge
-- **Runtime**: Node.js 20+
+- **Runtime**: Node.js 18+ (Node 20 recommended)
 - **Framework**: Express.js 4.19+
 - **Key Dependencies**:
-  - `basic-ftp` for FTP operations
-  - `winston` for logging
-  - `express-rate-limit` for rate limiting
-  - `dotenv` for environment configuration
+  - `basic-ftp` — FTP operations
+  - `winston` — structured logging
+  - `express-rate-limit` — rate limiting on webhook endpoints
+  - `dotenv` — environment configuration
 
 ### Infrastructure
 - **Containerization**: Docker + Docker Compose (profiles: `full`, `python`, `node`, `storage`)
 - **Static File Server**: Nginx (port 8080)
 - **Deployment Target**: Contabo Ubuntu VPS with vsftpd
+- **CI/CD**: GitHub Actions workflow (`.github/workflows/deploy.yml`) deploys on every push to `main`
 
 ---
 
@@ -89,9 +97,13 @@ contabo_storage_manager/
 ├── packages/
 │   ├── python-bridge/          # FastAPI service (port 8000)
 │   │   ├── app/
+│   │   │   ├── __init__.py
 │   │   │   ├── main.py         # FastAPI app entry + CORS + admin routes
 │   │   │   ├── webhooks.py     # Webhook route handlers + static /files
 │   │   │   ├── api.py          # Shaders, maps, images, flac_player song API
+│   │   │   ├── api_full.py     # Extended API router variant
+│   │   │   ├── api_shim.py     # Compatibility shim router
+│   │   │   ├── api_simple.py   # Minimal API router variant
 │   │   │   ├── audio_router.py # Pachinball music & samples API
 │   │   │   ├── sequencer_router.py  # web_sequencer cloud storage API
 │   │   │   ├── notes_router.py      # Plain-text markdown notes API
@@ -100,19 +112,28 @@ contabo_storage_manager/
 │   │   │   ├── adventure_router.py   # Adventure mode progress & levels
 │   │   │   ├── vps_browser_router.py # VPS file browser (browse/upload/delete)
 │   │   │   ├── models_router.py      # Model serving with Range/HEAD support
+│   │   │   ├── mod_router.py         # MOD music file indexing & metadata
+│   │   │   ├── presets_router.py     # MilkDrop preset upload/list/download
+│   │   │   ├── presets.py            # Preset index loader (startup)
+│   │   │   ├── cors.py               # CORS middleware options builder
+│   │   │   ├── flac_client.py        # External FLAC Player registration client
 │   │   │   ├── file_watcher.py       # Background watchdog auto-indexer
 │   │   │   ├── ftp_client.py         # FTPS + SFTP upload client
+│   │   │   ├── sync.py               # Background external API polling loop
 │   │   │   ├── config.py             # pydantic-settings configuration
-│   │   │   ├── models.py             # Pydantic models
+│   │   │   ├── models.py             # Shared Pydantic models
+│   │   │   ├── logger.py             # Structured logger setup
 │   │   │   └── templates/
 │   │   │       └── admin.html        # Universal upload dashboard
+│   │   ├── main_gcs.py         # Standalone GCS sync entry point
 │   │   └── requirements.txt
 │   ├── node-bridge/            # Express service (port 3000)
 │   │   ├── src/
 │   │   │   ├── index.js        # Express app entry point
-│   │   │   ├── webhooks.js     # Webhook handlers
+│   │   │   ├── webhooks.js     # Webhook handlers + signature verification
 │   │   │   └── logger.js       # Winston logger
-│   │   └── package.json
+│   │   ├── package.json
+│   │   └── package-lock.json
 │   └── shared/                 # Common utilities
 │       ├── ftp/
 │       │   ├── ftp_utils.py    # Python FTP helpers
@@ -126,10 +147,19 @@ contabo_storage_manager/
 │   ├── ftp_sync.py             # Sync local dir → FTP
 │   ├── sync_gcs_music.py       # Sync Google Cloud Storage music → local
 │   ├── sync_music_index.py     # Music index sync helper
+│   ├── sync_mods.py            # MOD file sync helper
+│   ├── sync_presets.py         # Preset sync helper
 │   ├── import_shaders.py       # Shader import utility
 │   ├── import_shaders_with_params.py
 │   ├── upload_model_to_vps.py  # Model upload helper
+│   ├── index_mods.py           # MOD index builder
+│   ├── download_shaders.sh     # Shader download script
 │   └── listFtpFiles.js         # List FTP contents
+├── tests/                      # pytest test suite
+│   ├── test_api_rating_filters.py
+│   ├── test_cors.py
+│   ├── test_flac_client.py
+│   └── test_presets_router.py
 ├── config/
 │   ├── nginx-files.conf        # Nginx static server config
 │   ├── nginx.conf.example      # Example reverse proxy config
@@ -143,11 +173,22 @@ contabo_storage_manager/
 │   ├── contabo-storage-sync.timer
 │   ├── ftpbridge-node.service
 │   └── ftpbridge-python.service
+├── .github/
+│   └── workflows/
+│       └── deploy.yml          # GitHub Actions CI/CD deploy workflow
 ├── docker-compose.yml          # Docker Compose orchestration
 ├── Dockerfile.python           # Python bridge container
 ├── Dockerfile.node             # Node bridge container
 ├── pyproject.toml              # Python project metadata & dev deps
-└── package.json                # Node.js workspace scripts
+├── package.json                # Node.js workspace scripts
+├── .env.example                # Environment variable template
+├── setup-services.sh           # Systemd service installer
+├── check-deployment.sh         # Deployment verification script
+├── restart-vps.sh              # VPS restart helper
+├── vps-git-fix.sh              # Git fix helper
+├── README.md
+├── AGENTS.md
+└── SEQUENCER_MIGRATION.md
 ```
 
 ---
@@ -169,10 +210,10 @@ contabo_storage_manager/
 #### APIs
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/api/health` | Health check |
+| `GET`  | `/api/health` | Health check (includes storage writable test) |
 | `GET`  | `/admin` | Universal upload dashboard |
 | `POST` | `/api/admin/sync-music` | Trigger GCS music sync |
-| `POST` | `/api/admin/run` | Run remote SSH command |
+| `POST` | `/api/admin/run` | Run remote SSH command (whitelisted) |
 | `GET`  | `/api/admin/logs/{task_id}` | Stream remote command logs (SSE) |
 
 **Shaders & Maps**
@@ -254,6 +295,21 @@ contabo_storage_manager/
 | `HEAD` | `/models/{model_id}/{file_path}` | Model file headers |
 | `GET`  | `/models/tts/list` | List TTS models |
 | `GET`  | `/models/tts/health` | TTS model health |
+
+**MOD Music**
+| `GET`  | `/api/mods` | List MOD files with metadata (search/tag filter) |
+| `GET`  | `/api/mods/scan` | Sync from remote FTP + scan directory + rebuild index |
+| `POST` | `/api/mods/reindex` | Re-extract metadata for all indexed mods |
+| `GET`  | `/api/mods/{mod_id}` | Get MOD metadata |
+| `PATCH`| `/api/mods/{mod_id}` | Update MOD metadata |
+| `GET`  | `/api/mods/{mod_id}/download` | Download MOD file (CORS-safe proxy) |
+
+**MilkDrop Presets**
+| `GET`  | `/api/presets/` | List preset directories with counts |
+| `GET`  | `/api/presets/{dir_name}` | List `.milk` files in a directory |
+| `GET`  | `/api/presets/{dir_name}/{filename}` | Get raw preset content |
+| `POST` | `/api/presets/{dir_name}` | Upload/overwrite a `.milk` file |
+| `DELETE`| `/api/presets/{dir_name}/{filename}` | Delete a `.milk` file |
 
 #### Static Files
 | `GET` | `/files/{path:path}` | Serve stored files with correct MIME types |
@@ -346,6 +402,8 @@ Copy `.env.example` to `.env` and configure:
 | `FTP_USER` | `ftpbridge` | FTP username |
 | `FTP_PASS` | *(empty)* | FTP password |
 | `FTP_UPLOAD_DIR` | `/home/ftpbridge/files` | Remote upload directory |
+| `FTP_PASSIVE_MIN` | `40000` | Passive mode port range lower bound |
+| `FTP_PASSIVE_MAX` | `40100` | Passive mode port range upper bound |
 | `FTP_TLS` | `false` | Enable FTPS |
 | `EXTERNAL_FTP_HOST` | *(empty)* | External SFTP host |
 | `EXTERNAL_FTP_USER` | *(empty)* | External SFTP user |
@@ -354,9 +412,13 @@ Copy `.env.example` to `.env` and configure:
 | `EXTERNAL_FTP_DIR` | `/` | External SFTP base directory |
 | `WEBHOOK_SECRET` | *(empty)* | HMAC secret for signature verification |
 | `WEBHOOK_HMAC_ALGO` | `sha256` | HMAC algorithm (`sha256` or `sha1`) |
+| `PYTHON_HOST` | `0.0.0.0` | Python bridge bind host |
 | `PYTHON_PORT` | `8000` | Python bridge port |
+| `PYTHON_WORKERS` | `2` | Uvicorn worker count |
+| `NODE_HOST` | `0.0.0.0` | Node bridge bind host |
 | `NODE_PORT` | `3000` | Node bridge port |
 | `CORS_ORIGINS` | `*` | Comma-separated CORS origins |
+| `CORS_ORIGIN_REGEX` | *(built-in default)* | Regex fallback for trusted browser origins |
 | `FILES_DIR` | `/home/ftpbridge/files` | Local storage directory |
 | `STATIC_BASE_URL` | `https://storage.1ink.us` | Public HTTPS URL for file links |
 | `MAX_UPLOAD_MB` | `8192` | Maximum upload size in MB |
@@ -366,6 +428,7 @@ Copy `.env.example` to `.env` and configure:
 | `EXTERNAL_API_URL` | *(empty)* | URL for polling sync |
 | `EXTERNAL_API_KEY` | *(empty)* | Bearer token for external API |
 | `POLL_INTERVAL_SECONDS` | `60` | Polling interval |
+| `FLAC_PLAYER_API_URL` | *(empty)* | External FLAC Player backend URL for auto-registration |
 
 ---
 
@@ -397,15 +460,22 @@ ruff format packages/python-bridge
 
 ### Python Tests
 
-`pyproject.toml` configures pytest with `asyncio_mode = "auto"` and `testpaths = ["tests"]`, but **no test files currently exist** in the repository.
+The project uses `pytest` with `asyncio_mode = "auto"`. Tests live in the `tests/` directory at the project root.
 
-To add tests, create a `tests/` directory at the project root and write `pytest` test files. Run with:
+**Existing test files:**
+
+| File | What it tests |
+|------|---------------|
+| `tests/test_api_rating_filters.py` | Query-parameter filtering on `/api/songs` (`rating_gte`, `rating_lt`) |
+| `tests/test_cors.py` | CORS preflight behavior: allowed origins pass, unknown origins are rejected |
+| `tests/test_flac_client.py` | `flac_client.register_song_with_flac_player()` — forwards extended metadata when `FLAC_PLAYER_API_URL` is set, returns `None` when unset |
+| `tests/test_presets_router.py` | Full CRUD on `/api/presets` — list dirs, list files, upload `.milk`, download, delete, path-traversal rejection |
 
 ```bash
 # Install dev dependencies
 pip install -e ".[dev]"
 
-# Run tests
+# Run all tests
 pytest
 
 # Run with coverage
@@ -434,6 +504,47 @@ curl -X POST http://localhost:8000/webhook/flac \
 
 ---
 
+## Deployment
+
+### GitHub Actions CI/CD
+
+The repository includes `.github/workflows/deploy.yml`. On every push to `main`:
+
+1. The workflow SSHs into the VPS using secrets (`VPS_HOST`, `VPS_USER`, `VPS_PASSWORD`).
+2. Runs `git pull origin main` in `/root/contabo_storage_manager`.
+3. Prefers Docker if available:
+   ```bash
+   docker compose --profile full up -d --build
+   ```
+4. Falls back to systemd if Docker is unavailable:
+   ```bash
+   bash setup-services.sh
+   systemctl restart contabo-storage-python
+   systemctl restart contabo-storage-node
+   systemctl enable contabo-storage-sync.timer
+   systemctl start contabo-storage-sync.timer
+   ```
+5. Waits for the health endpoint (`/health` on port 8000) to return OK.
+6. Triggers a background music sync via `POST /api/admin/sync-music`.
+
+### Manual VPS Deployment
+
+```bash
+# Docker path
+cd /root/contabo_storage_manager
+git pull origin main
+docker compose --profile full up -d --build
+
+# Systemd path (fallback)
+cd /root/contabo_storage_manager
+git pull origin main
+bash setup-services.sh
+systemctl restart contabo-storage-python
+systemctl restart contabo-storage-node
+```
+
+---
+
 ## Security Considerations
 
 ### Webhook Signature Verification
@@ -450,12 +561,14 @@ curl -X POST http://localhost:8000/webhook/flac \
 - Path traversal prevention in static file serving (`resolve()` + prefix check)
 - Max upload size configurable via `MAX_UPLOAD_MB` (default 8192 MB)
 - Notes API validates names with regex `^[a-zA-Z0-9_\-\.]+$` and rejects traversal sequences
+- Preset API rejects filenames with `..`, `/`, `\`, or non-`.milk` extensions
 
 ### Network Security
 - FTP/SFTP connections use TLS when `FTP_TLS=true`
 - Port 22 automatically uses SFTP (paramiko) instead of FTPS
 - Rate limiting on Node bridge webhook endpoints (100 req/min per IP)
-- Enhanced CORS middleware plus explicit `@app.options("/{path:path}")` handler
+- Enhanced CORS middleware plus explicit global CORS header fallback middleware
+- CORS `allow_credentials` is disabled when `*` is in `CORS_ORIGINS`
 
 ### Secrets Management
 - Never commit `.env` file (listed in `.gitignore`)
@@ -505,8 +618,14 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 │   └── adventure/
 ├── leaderboard/
 │   └── index.json
+├── mods/                      # MOD music files + index.json
 ├── models/                    # ML models for WebLLM / TTS
 │   └── tts/
+├── milk/                      # MilkDrop presets (default pool)
+├── milkSML/                   # MilkDrop presets (small pool)
+├── milkMED/                   # MilkDrop presets (medium pool)
+├── milkLRG/                   # MilkDrop presets (large pool)
+├── custom_milk/               # User-uploaded custom presets
 ├── images.json                # Recorded images index
 └── songs.json                 # flac_player music library index
 ```
@@ -522,6 +641,10 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 - Background file watcher (`watchdog`) auto-indexes new audio files into `songs.json`
 - Admin panel supports remote SSH command execution via `asyncssh`
 - Model router implements full HTTP Range request support for WebLLM chunked downloads
+- `flac_client.py` optionally registers uploaded audio with an external FLAC Player backend
+- `mod_router.py` uses `openmpt123 --info` to extract title, tracker (author), and duration from MOD files
+- `presets_router.py` whitelists 5 preset directories and enforces `.milk` extension; paths are resolved via a static mapping dict to prevent traversal
+- `cors.py` builds `CORSMiddleware` options dynamically: credentials are disabled when `*` is present in origins
 
 ### Node Bridge
 - Raw body capture middleware for HMAC verification
