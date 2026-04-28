@@ -606,7 +606,7 @@ async def list_songs(
     else:  # date
         songs.sort(key=lambda s: s.get("created_at", s.get("date", "")), reverse=reverse)
     
-    # Ensure absolute URLs
+    # Ensure absolute URLs and migrate old proxy URLs to direct static URLs
     base_url = str(settings.static_base_url).rstrip("/")
     api_base = "https://storage.noahcohn.com"
     for song in songs:
@@ -615,6 +615,10 @@ async def list_songs(
             song["url"] = f"{base_url}/audio/music/{song['filename']}"
         elif url and url.startswith("/"):
             song["url"] = f"{api_base}{url}"
+        elif url and "/api/music/" in url and song.get("filename"):
+            # Rewrite legacy proxy URLs (e.g. https://storage.noahcohn.com/api/music/abc123)
+            # to direct nginx static URLs so they actually work.
+            song["url"] = f"{base_url}/audio/music/{song['filename']}"
     
     # Apply pagination
     total = len(songs)
@@ -802,7 +806,7 @@ async def stream_music_file(song_id: str):
                 headers={"Accept-Ranges": "bytes"}
             )
 
-    # Try common extensions
+    # Try common extensions with the exact song_id
     for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
         file_path = audio_dir / f"{song_id}{ext}"
         if file_path.exists():
@@ -811,7 +815,30 @@ async def stream_music_file(song_id: str):
                 media_type=_media_type_for_ext(file_path),
                 headers={"Accept-Ranges": "bytes"}
             )
-    
+
+    # Fallback: the upload endpoint names files {song_id}_{title}.flac,
+    # so look for any file starting with {song_id}_
+    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
+        candidates = list(audio_dir.glob(f"{song_id}_*{ext}"))
+        if candidates:
+            file_path = candidates[0]
+            return FileResponse(
+                file_path,
+                media_type=_media_type_for_ext(file_path),
+                headers={"Accept-Ranges": "bytes"}
+            )
+
+    # Last resort: look for any file containing the song_id anywhere in the name
+    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
+        candidates = list(audio_dir.glob(f"*{song_id}*{ext}"))
+        if candidates:
+            file_path = candidates[0]
+            return FileResponse(
+                file_path,
+                media_type=_media_type_for_ext(file_path),
+                headers={"Accept-Ranges": "bytes"}
+            )
+
     raise HTTPException(status_code=404, detail="Audio file not found")
 
 
@@ -914,6 +941,10 @@ async def upload_song(
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
     # Create song entry
+    # Use the direct nginx static URL so the browser can stream the file
+    # directly without proxying through FastAPI.
+    base_url = str(settings.static_base_url).rstrip("/")
+    direct_url = f"{base_url}/audio/music/{storage_filename}"
     song = {
         "id": song_id,
         "name": f"{title}.flac",
@@ -928,7 +959,7 @@ async def upload_song(
         "last_played": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": storage_filename,
-        "url": f"https://storage.noahcohn.com/api/music/{song_id}",
+        "url": direct_url,
         "size": size_bytes,
     }
 
