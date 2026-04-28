@@ -606,19 +606,21 @@ async def list_songs(
     else:  # date
         songs.sort(key=lambda s: s.get("created_at", s.get("date", "")), reverse=reverse)
     
-    # Ensure absolute URLs and migrate old proxy URLs to direct static URLs
+    # Resolve audio URLs: filename is authoritative for local static serving.
+    # Any song with a filename gets a direct static URL regardless of what's
+    # stored in the url field (handles old backends, HF Space URLs, etc.).
+    # Songs without a filename fall back to the /api/music/{id} proxy endpoint.
     base_url = str(settings.static_base_url).rstrip("/")
-    api_base = "https://storage.noahcohn.com"
+    api_base = str(settings.static_base_url).split("/files")[0]  # e.g. https://storage.noahcohn.com
     for song in songs:
+        filename = song.get("filename")
         url = song.get("url")
-        if not url and song.get("filename"):
-            song["url"] = f"{base_url}/audio/music/{song['filename']}"
+        if filename:
+            song["url"] = f"{base_url}/audio/music/{filename}"
         elif url and url.startswith("/"):
             song["url"] = f"{api_base}{url}"
-        elif url and "/api/music/" in url and song.get("filename"):
-            # Rewrite legacy proxy URLs (e.g. https://storage.noahcohn.com/api/music/abc123)
-            # to direct nginx static URLs so they actually work.
-            song["url"] = f"{base_url}/audio/music/{song['filename']}"
+        elif not url:
+            song["url"] = f"{api_base}/api/music/{song['id']}"
     
     # Apply pagination
     total = len(songs)
@@ -675,6 +677,53 @@ async def get_songs_tags():
     
     tags = [{"name": k, "count": v} for k, v in sorted(tag_counts.items(), key=lambda x: -x[1])]
     return {"tags": tags}
+
+
+@api_router.get("/songs/debug")
+async def debug_songs():
+    """Diagnose song URL resolution and file existence. Useful after storage migrations."""
+    songs = _load_songs()
+    base = Path(settings.files_dir)
+    audio_dir = base / "audio" / "music"
+    base_url = str(settings.static_base_url).rstrip("/")
+    api_base = base_url.split("/files")[0]
+
+    rows = []
+    for song in songs[:100]:
+        filename = song.get("filename")
+        stored_url = song.get("url")
+        if filename:
+            resolved_url = f"{base_url}/audio/music/{filename}"
+            file_exists = (audio_dir / filename).exists()
+        elif stored_url:
+            resolved_url = stored_url if stored_url.startswith("http") else f"{api_base}{stored_url}"
+            file_exists = None  # can't check remote URLs
+        else:
+            resolved_url = f"{api_base}/api/music/{song['id']}"
+            file_exists = any(
+                (audio_dir / f"{song['id']}{ext}").exists()
+                for ext in [".flac", ".mp3", ".wav", ".ogg", ".m4a"]
+            )
+        rows.append({
+            "id": song.get("id"),
+            "name": song.get("title") or song.get("name"),
+            "filename": filename,
+            "stored_url": stored_url,
+            "resolved_url": resolved_url,
+            "file_exists": file_exists,
+        })
+
+    files_found = sum(1 for r in rows if r["file_exists"] is True)
+    files_missing = sum(1 for r in rows if r["file_exists"] is False)
+    return {
+        "audio_dir": str(audio_dir),
+        "static_base_url": base_url,
+        "total_songs": len(songs),
+        "checked": len(rows),
+        "files_found": files_found,
+        "files_missing": files_missing,
+        "songs": rows,
+    }
 
 
 @api_router.get("/songs/{song_id}", response_model=SongMetadata)
