@@ -217,6 +217,7 @@ async def flac_webhook(
             genre=song.get("genre"),
             duration=song.get("duration"),
             filename_on_storage=storage_filename,
+            song_id=song_id,
         )
 
     # TODO: Add handling for "save_playlist" and "save_metadata" (JSON only)

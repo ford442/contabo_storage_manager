@@ -942,16 +942,17 @@ async def upload_song(
     public_url = f"{base_url}/audio/music/{storage_filename}"
     rounded_duration_sec = round(duration_sec, 2)
     await register_song_with_flac_player(
-    filename=song["name"],
-    public_url=public_url,
-    title=title,
-    author=author,
-    tags=tag_list,
-    genre=genre or None,
-    duration=round(duration_sec, 2) if duration_sec is not None else None,
-    filename_on_storage=storage_filename,
-    auto_enrich=True,
-)
+        filename=song["name"],
+        public_url=public_url,
+        title=title,
+        author=author,
+        tags=tag_list,
+        genre=genre or None,
+        duration=rounded_duration_sec if duration_sec is not None else None,
+        filename_on_storage=storage_filename,
+        auto_enrich=True,
+        song_id=song_id,
+    )
 
 
     return {
