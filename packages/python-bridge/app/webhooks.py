@@ -466,6 +466,28 @@ updatedAt: {updated_at}
 
 
 # ====================== Static File Serving ======================
+@files_router.head("/{file_path:path}", summary="HEAD for stored files")
+async def head_file(file_path: str):
+    """Respond to HEAD requests so browsers can check file existence and size."""
+    from fastapi.responses import Response as _Response
+    base = Path(settings.files_dir).resolve()
+    target = (base / file_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    suffix = target.suffix.lower()
+    media_type = MIME_MAP.get(suffix, "application/octet-stream")
+    return _Response(
+        status_code=200,
+        headers={
+            "Content-Length": str(target.stat().st_size),
+            "Content-Type": media_type,
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
 @files_router.get("/{file_path:path}", summary="Serve stored files with correct MIME")
 async def serve_file(file_path: str):
     """Serve files from the storage directory with proper MIME types."""

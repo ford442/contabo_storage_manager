@@ -580,11 +580,11 @@ async def list_songs(
     if search:
         search_lower = search.lower()
         songs = [s for s in songs if (
-            search_lower in s.get("name", "").lower() or
-            search_lower in s.get("title", "").lower() or
-            search_lower in s.get("author", "").lower() or
-            search_lower in s.get("artist", "").lower() or
-            search_lower in s.get("description", "").lower() or
+            search_lower in (s.get("name") or "").lower() or
+            search_lower in (s.get("title") or "").lower() or
+            search_lower in (s.get("author") or "").lower() or
+            search_lower in (s.get("artist") or "").lower() or
+            search_lower in (s.get("description") or "").lower() or
             any(search_lower in str(tag).lower() for tag in s.get("tags", []))
         )]
     if exclude_id:
