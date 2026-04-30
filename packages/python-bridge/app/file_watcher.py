@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,9 @@ from pathlib import Path
 from typing import Set, Callable, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileMovedEvent
+
+from .config import settings
+from .flac_client import register_song_with_flac_player_sync
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +48,12 @@ class FileWatcherHandler(FileSystemEventHandler):
 
 
 def _handle_new_audio(path: Path):
-    """Auto-index a new audio file into songs.json."""
-    
-    # Give api.py time to write the JSON metadata first
-    time.sleep(2)
-    
+    """Auto-index a new audio file into songs.json and notify the FLAC Player backend."""
+
+    # Give api.py upload endpoint time to write the JSON metadata first.
+    # FTP drops don't touch songs.json, so the extra wait is harmless.
+    time.sleep(5)
+
     try:
         # Delayed import to avoid circular imports at module load time
         from .api import _load_songs, _save_songs
@@ -58,23 +63,32 @@ def _handle_new_audio(path: Path):
 
     ext = path.suffix.lower()
     allowed_exts = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac'}
-    
+
     if ext not in allowed_exts:
         return
-    
+
     songs = _load_songs()
     filename = path.name
-    
-    # Check if already indexed by filename
+
+    # Check if already indexed by filename (upload endpoint handles this)
     if any(s.get("filename") == filename for s in songs):
         logger.info(f"Audio file already indexed: {filename}")
         return
-    
-    # Generate metadata matching the upload endpoint logic
-    song_id = str(uuid.uuid4())[:8]
-    raw_title = path.stem.replace('_', ' ').replace('-', ' ')
+
+    # Try to extract an existing song ID from the filename pattern used by
+    # the upload endpoint: {song_id}_{safe_title}.flac
+    # This makes the webhook idempotent if the upload endpoint already fired.
+    stem = path.stem
+    match = re.match(r"^([a-f0-9]{8})_.+$", stem)
+    song_id = match.group(1) if match else str(uuid.uuid4())[:8]
+
+    raw_title = stem.split("_", 1)[1].replace("_", " ").replace("-", " ") if "_" in stem and match else stem.replace("_", " ").replace("-", " ")
     title = raw_title.strip() or "Untitled"
-    
+
+    # Absolute public URL for the static file server
+    base_url = str(settings.static_base_url).rstrip("/")
+    public_url = f"{base_url}/audio/music/{filename}"
+
     song = {
         "id": song_id,
         "name": f"{title}{ext}",
@@ -89,13 +103,27 @@ def _handle_new_audio(path: Path):
         "last_played": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": filename,
-        "url": f"/api/music/{song_id}",
+        "url": public_url,
         "size": path.stat().st_size
     }
-    
+
     songs.append(song)
     _save_songs(songs)
     logger.info(f"Auto-indexed new audio file: {filename} -> {song_id}")
+
+    # Push to external FLAC Player backend so the track appears instantly
+    register_song_with_flac_player_sync(
+        filename=song["name"],
+        public_url=public_url,
+        title=title,
+        author="Unknown",
+        tags=[],
+        genre=None,
+        duration=None,
+        filename_on_storage=filename,
+        auto_enrich=True,
+        song_id=song_id,
+    )
 
 
 def _handle_new_note(path: Path):
