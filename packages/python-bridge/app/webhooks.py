@@ -62,7 +62,7 @@ def _verify_signature(payload: bytes, signature_header: Optional[str]) -> bool:
     except Exception:
         return False
 
-async def _save_upload(upload: UploadFile, rel_dir: str) -> dict:
+async def _save_upload(upload: UploadFile, rel_dir: str, remote_rel_dir: Optional[str] = None) -> dict:
     """Save file locally + optionally upload to external SFTP via paramiko."""
     base_dir = Path(settings.files_dir) / rel_dir
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -80,9 +80,10 @@ async def _save_upload(upload: UploadFile, rel_dir: str) -> dict:
         f.write(content)
 
     local_rel_path = f"{rel_dir}/{filename}"
+    remote_rel_path = f"{remote_rel_dir}/{filename}" if remote_rel_dir else local_rel_path
 
     # Upload to external storage via paramiko (if configured)
-    remote_path = await ftp_client.upload(local_path, local_rel_path)
+    remote_path = await ftp_client.upload(local_path, remote_rel_path)
 
     return {
         "local_path": local_rel_path,
@@ -164,13 +165,16 @@ async def flac_webhook(
     if file and action == "upload_audio":
         ext = Path(file.filename or "").suffix.lower()
         if ext == ".flac":
-            rel_dir = settings.external_flac_dir
+            # Save locally to audio/music (consistent with /api/songs/upload)
+            # and mirror remotely to external_flac_dir
+            result = await _save_upload(file, "audio/music", settings.external_flac_dir)
         elif ext in (".wav", ".aiff", ".aif"):
             rel_dir = "audio/wav"
+            result = await _save_upload(file, rel_dir)
         else:
             rel_dir = "audio/misc"
+            result = await _save_upload(file, rel_dir)
 
-        result = await _save_upload(file, rel_dir)
         saved_files.append(result["local_path"])
         if result.get("remote_path"):
             remote_files.append(result["remote_path"])
@@ -472,7 +476,7 @@ async def head_file(file_path: str):
     from fastapi.responses import Response as _Response
     base = Path(settings.files_dir).resolve()
     target = (base / file_path).resolve()
-    if not str(target).startswith(str(base)):
+    if not target.is_relative_to(base):
         raise HTTPException(status_code=403, detail="Forbidden")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
@@ -495,7 +499,7 @@ async def serve_file(file_path: str):
     target = (base / file_path).resolve()
 
     # Prevent path traversal
-    if not str(target).startswith(str(base)):
+    if not target.is_relative_to(base):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     if not target.exists() or not target.is_file():

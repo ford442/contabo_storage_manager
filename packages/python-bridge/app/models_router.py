@@ -154,9 +154,10 @@ async def serve_model_file(
     models_dir = _get_models_dir()
     model_dir = models_dir / model_id
     target_file = (model_dir / file_path).resolve()
+    resolved_model_dir = model_dir.resolve()
     
     # Security: Prevent directory traversal
-    if not str(target_file).startswith(str(model_dir.resolve())):
+    if not target_file.is_relative_to(resolved_model_dir):
         logger.warning(f"Directory traversal attempt: {model_id}/{file_path}")
         raise HTTPException(status_code=403, detail="Access denied")
     
@@ -352,9 +353,10 @@ async def head_model_file(
     models_dir = _get_models_dir()
     model_dir = models_dir / model_id
     target_file = (model_dir / file_path).resolve()
+    resolved_model_dir = model_dir.resolve()
     
     # Security: Prevent directory traversal
-    if not str(target_file).startswith(str(model_dir.resolve())):
+    if not target_file.is_relative_to(resolved_model_dir):
         raise HTTPException(status_code=403, detail="Access denied")
     
     if not target_file.exists() or not target_file.is_file():

@@ -278,6 +278,7 @@ class VPSFileWatcher:
 
 # Global watcher instance
 _watcher_instance: Optional[VPSFileWatcher] = None
+_watcher_lock_fd: Optional[object] = None  # Keep lock alive so GC doesn't release it
 
 
 def get_watcher(files_dir: str) -> VPSFileWatcher:
@@ -289,7 +290,28 @@ def get_watcher(files_dir: str) -> VPSFileWatcher:
 
 
 def start_watching(files_dir: str):
-    """Start the file watcher with sensible defaults."""
+    """Start the file watcher with sensible defaults.
+    
+    Uses a file lock so only one process starts the watcher (prevents duplicate
+    observers when running multiple uvicorn workers).
+    """
+    import fcntl
+    import os
+
+    global _watcher_lock_fd
+
+    lock_file = Path(files_dir) / ".watcher.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = open(lock_file, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.info("File watcher already running in another process, skipping")
+        lock_fd.close()
+        return None
+    # Store globally so the lock isn't released when this function returns
+    _watcher_lock_fd = lock_fd
+
     def on_video(path: Path):
         logger.info(f"New video: {path}")
     

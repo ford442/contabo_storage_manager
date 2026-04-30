@@ -123,6 +123,15 @@ def _get_shaders_dir() -> Path:
     return shaders_dir
 
 
+import re as _re
+_SHADER_ID_RE = _re.compile(r"^[a-zA-Z0-9_\-]+$")
+
+def _validate_shader_id(shader_id: str) -> None:
+    """Validate shader_id to prevent path traversal."""
+    if not shader_id or not _SHADER_ID_RE.match(shader_id):
+        raise HTTPException(status_code=400, detail="Invalid shader ID")
+
+
 def _load_shader_meta(shader_dir: Path) -> Optional[dict]:
     """Load shader metadata from its meta.json file."""
     meta_file = shader_dir / "meta.json"
@@ -150,7 +159,7 @@ async def list_shaders(
     per_page: int = Query(100, ge=1, le=1000),
     tag: Optional[str] = None,
     rating: Optional[int] = None,
-    sort_by: str = Query("name", regex="^(name|date|rating)$")
+    sort_by: str = Query("name", pattern="^(name|date|rating)$")
 ):
     """List all shaders with pagination, filtering, and sorting."""
     shaders_dir = _get_shaders_dir()
@@ -244,6 +253,7 @@ async def list_maps():
 @api_router.get("/shaders/{shader_id}", response_model=ShaderMetadata)
 async def get_shader(shader_id: str):
     """Get a single shader's metadata by ID."""
+    _validate_shader_id(shader_id)
     shaders_dir = _get_shaders_dir()
     shader_dir = shaders_dir / shader_id
     
@@ -302,6 +312,7 @@ async def create_shader(shader_data: dict):
 @api_router.put("/shaders/{shader_id}", response_model=ShaderMetadata)
 async def update_shader(shader_id: str, payload: MetaPatch):
     """Update shader metadata (including params)."""
+    _validate_shader_id(shader_id)
     shaders_dir = _get_shaders_dir()
     shader_dir = shaders_dir / shader_id
     
@@ -342,6 +353,7 @@ async def update_shader(shader_id: str, payload: MetaPatch):
 @api_router.post("/shaders/{shader_id}/rate")
 async def rate_shader(shader_id: str, rating_update: ShaderRatingUpdate):
     """Rate a shader or mark it as having errors (rating=0)."""
+    _validate_shader_id(shader_id)
     shaders_dir = _get_shaders_dir()
     shader_dir = shaders_dir / shader_id
     
@@ -370,6 +382,7 @@ async def rate_shader(shader_id: str, rating_update: ShaderRatingUpdate):
 @api_router.get("/shaders/{shader_id}/rating")
 async def get_shader_rating(shader_id: str):
     """Get a shader's current rating."""
+    _validate_shader_id(shader_id)
     shaders_dir = _get_shaders_dir()
     shader_dir = shaders_dir / shader_id
     
@@ -391,6 +404,7 @@ async def get_shader_rating(shader_id: str):
 @api_router.get("/shaders/{shader_id}/code")
 async def get_shader_code(shader_id: str):
     """Get a shader's WGSL source code."""
+    _validate_shader_id(shader_id)
     shaders_dir = _get_shaders_dir()
     shader_dir = shaders_dir / shader_id
     
@@ -538,15 +552,39 @@ def _load_songs() -> List[dict]:
             data = json.load(f)
             return data.get("songs", []) if isinstance(data, dict) else data
     except (json.JSONDecodeError, IOError):
+        # If JSON is corrupted, try to recover from backup
+        backup = songs_file.with_suffix(".json.bak")
+        if backup.exists():
+            try:
+                with open(backup, "r") as f:
+                    data = json.load(f)
+                logger.warning("Recovered songs.json from backup after corruption")
+                return data.get("songs", []) if isinstance(data, dict) else data
+            except Exception:
+                pass
         return []
 
 
 def _save_songs(songs: List[dict]):
-    """Save songs to JSON file."""
+    """Save songs to JSON file atomically to prevent corruption under concurrent access."""
     songs_file = _get_songs_file()
     songs_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(songs_file, "w") as f:
-        json.dump({"songs": songs}, f, indent=2)
+    temp_file = songs_file.with_suffix(".json.tmp")
+    backup_file = songs_file.with_suffix(".json.bak")
+    try:
+        with open(temp_file, "w") as f:
+            json.dump({"songs": songs}, f, indent=2)
+        # Keep a backup of the previous version
+        if songs_file.exists():
+            songs_file.replace(backup_file)
+        temp_file.replace(songs_file)
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
 
 
 @api_router.get("/songs", response_model=List[SongMetadata])
@@ -1020,10 +1058,13 @@ async def upload_song(
         "size": size_bytes,
     }
 
-    # Add to songs index
+    # Add to songs index (idempotent: skip if already indexed by filename)
     songs = _load_songs()
-    songs.append(song)
-    _save_songs(songs)
+    if not any(s.get("filename") == storage_filename for s in songs):
+        songs.append(song)
+        _save_songs(songs)
+    else:
+        logger.info("Song %s already in index, skipping duplicate append", storage_filename)
 
     # Notify external FLAC Player backend if configured
     base_url = str(settings.static_base_url).rstrip("/")

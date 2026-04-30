@@ -243,16 +243,27 @@ async def leaderboard_redirect(request: Request):
     return RedirectResponse(url=f"/api/leaderboard?{query}", status_code=307)
 
 # Global CORS response handler - adds headers only when missing so we don't
-# duplicate values already set by CORSMiddleware.
+# duplicate values already set by CORSMiddleware. Mirrors the same whitelist
+# logic to avoid reflecting arbitrary origins or forcing credentials.
+import re as _re
+
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
     response = await call_next(request)
-    origin = request.headers.get("origin", "*")
-    if "access-control-allow-origin" not in response.headers:
-        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
-    if "access-control-allow-credentials" not in response.headers:
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-    if "vary" not in response.headers:
+    origin = request.headers.get("origin")
+    if not origin or "access-control-allow-origin" in response.headers:
+        return response
+
+    allowed = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    regex = settings.cors_origin_regex.strip() or None
+    is_allowed = origin in allowed
+    if not is_allowed and regex and "*" not in allowed:
+        is_allowed = bool(_re.match(regex, origin))
+
+    if is_allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        if "*" not in allowed:
+            response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
     return response
 
