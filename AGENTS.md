@@ -8,7 +8,7 @@
 
 ## Project Overview
 
-This project provides webhook receivers, REST APIs, and static file serving for multiple frontend applications. It persists payloads and files locally under a single directory, syncs to external FTP/SFTP, and serves content back over HTTPS via Nginx.
+This project provides webhook receivers, REST APIs, and static file serving for multiple frontend applications. It persists payloads and files locally under a single directory, syncs to external FTP/SFTP (including automatic FLAC mirroring), and serves content back over HTTPS via Nginx.
 
 ### Architecture
 
@@ -642,6 +642,7 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 - Admin panel supports remote SSH command execution via `asyncssh`
 - Model router implements full HTTP Range request support for WebLLM chunked downloads
 - `flac_client.py` optionally registers uploaded audio with an external FLAC Player backend
+- Uploaded FLAC files are mirrored to the external SFTP host under `EXTERNAL_FLAC_DIR` (default `flac_songs`) as a best-effort operation
 - `mod_router.py` uses `openmpt123 --info` to extract title, tracker (author), and duration from MOD files
 - `presets_router.py` whitelists 5 preset directories and enforces `.milk` extension; paths are resolved via a static mapping dict to prevent traversal
 - `cors.py` builds `CORSMiddleware` options dynamically: credentials are disabled when `*` is present in origins

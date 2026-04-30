@@ -164,7 +164,7 @@ async def flac_webhook(
     if file and action == "upload_audio":
         ext = Path(file.filename or "").suffix.lower()
         if ext == ".flac":
-            rel_dir = "audio/flac"
+            rel_dir = settings.external_flac_dir
         elif ext in (".wav", ".aiff", ".aif"):
             rel_dir = "audio/wav"
         else:

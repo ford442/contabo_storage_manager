@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # When set, uploaded audio files are also registered with this API.
     flac_player_api_url: Optional[str] = None
 
+    # Remote FLAC mirror folder (under EXTERNAL_FTP_DIR)
+    external_flac_dir: str = "flac_songs"
+
     # FTP settings (alternative to EXTERNAL_FTP_*)
     ftp_host: Optional[str] = None
     ftp_port: int = 21

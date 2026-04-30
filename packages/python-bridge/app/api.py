@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .flac_client import register_song_with_flac_player
+from .ftp_client import ftp_client
 from . import presets
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
@@ -909,6 +910,13 @@ async def upload_song(
                 temp_path.unlink()
         except Exception:
             pass
+
+    # Mirror to external SFTP (best-effort)
+    remote_rel = f"{settings.external_flac_dir}/{storage_filename}"
+    try:
+        await ftp_client.upload(dest, remote_rel)
+    except Exception as exc:
+        logger.warning("Failed to mirror FLAC to external storage: %s", exc)
 
     # Parse tags
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
