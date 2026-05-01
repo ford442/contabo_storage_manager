@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     # MilkDrop preset directories base (milk/, milkSML/, milkMED/, milkLRG/, custom_milk/)
     presets_dir: str = "/data/files"
 
+    # Texture directories base (textures/, weeks_textures/, custom_textures/)
+    textures_dir: str = "/data/files"
+
+    # Song directories base (songs/, weeks_songs/, flac_songs/)
+    songs_dir: str = "/data/files"
+
     # Webhook security
     webhook_secret: Optional[str] = None
 
