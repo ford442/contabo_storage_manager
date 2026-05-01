@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +14,113 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 audio_router = APIRouter(prefix="/api", tags=["audio"])
+
+# ── Song directory constants ───────────────────────────────────────────────────
+
+SONG_DIRS: tuple[str, ...] = ("songs", "weeks_songs", "flac_songs")
+
+SONG_EXTENSIONS: frozenset[str] = frozenset(
+    {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".opus"}
+)
+
+_SONG_MIME_TYPES: dict[str, str] = {
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".opus": "audio/opus",
+}
+
+# Static mapping built once at module load — never derive paths from raw user input.
+_SONG_DIR_MAP: dict[str, Path] = {
+    name: Path(settings.songs_dir) / name for name in SONG_DIRS
+}
+
+
+# ── Song directory Pydantic models ────────────────────────────────────────────
+
+
+class SongDirInfo(BaseModel):
+    name: str
+    count: int
+    updated_at: str | None
+
+
+class SongFileMeta(BaseModel):
+    name: str
+    size: int
+    modified_at: str
+    url: str  # full URL: {settings.static_base_url}/songs/dirs/{dir_name}/{filename}
+
+
+# ── Song directory helpers ─────────────────────────────────────────────────────
+
+
+def _iso_utc(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat()
+
+
+def _validate_song_dir(dir_name: str) -> None:
+    """Raise HTTP 400 if dir_name is not in the allowed whitelist."""
+    if dir_name not in SONG_DIRS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown song directory '{dir_name}'. "
+            f"Allowed: {', '.join(SONG_DIRS)}",
+        )
+
+
+def _song_dir(dir_name: str) -> Path:
+    """Return (and auto-create) the path for a whitelisted song directory."""
+    if dir_name not in _SONG_DIR_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown song directory '{dir_name}'. "
+            f"Allowed: {', '.join(SONG_DIRS)}",
+        )
+    d = _SONG_DIR_MAP[dir_name]
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _validate_song_filename(filename: str) -> None:
+    """Raise HTTP 400 if the filename is unsafe or not an allowed audio type."""
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename is required.")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed.")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SONG_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{suffix}'. "
+            f"Allowed: {', '.join(sorted(SONG_EXTENSIONS))}",
+        )
+    blocked_chars = set(
+        "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+        "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
+        "\x7f<>:\"|?*"
+    )
+    if any(c in blocked_chars for c in filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Filename contains invalid characters.",
+        )
+
+
+def _song_file_path(dir_name: str, filename: str) -> Path:
+    """Return the resolved path for a song file, confined to its directory."""
+    song_dir = _song_dir(dir_name)
+    candidate = (song_dir / filename).resolve()
+    if not candidate.is_relative_to(song_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed.")
+    return candidate
+
+
+def _song_file_url(dir_name: str, filename: str) -> str:
+    base = settings.static_base_url.rstrip("/")
+    return f"{base}/songs/dirs/{dir_name}/{filename}"
 
 
 # ====================== Models ======================
@@ -287,3 +394,59 @@ async def get_random_sample(category: str):
     sample["url"] = f"{base_url}/audio/samples/{sample['id']}.mp3"
     
     return sample
+
+
+# ── Song directory listing endpoints ──────────────────────────────────────────
+
+
+@audio_router.get("/songs/dirs", response_model=list[SongDirInfo])
+async def list_song_dirs():
+    """List all song directories with file counts and latest modification time."""
+    results: list[SongDirInfo] = []
+    for name in SONG_DIRS:
+        d = _song_dir(name)
+        files = [f for f in d.iterdir() if f.is_file() and f.suffix.lower() in SONG_EXTENSIONS]
+        count = len(files)
+        updated_at: str | None = None
+        if files:
+            latest = max(f.stat().st_mtime for f in files)
+            updated_at = _iso_utc(latest)
+        results.append(SongDirInfo(name=name, count=count, updated_at=updated_at))
+    return results
+
+
+@audio_router.get("/songs/dirs/{dir_name}", response_model=list[SongFileMeta])
+async def list_song_dir_files(dir_name: str):
+    """List audio files in a song directory, sorted by name."""
+    _validate_song_dir(dir_name)
+    d = _song_dir(dir_name)
+    files = sorted(
+        (f for f in d.iterdir() if f.is_file() and f.suffix.lower() in SONG_EXTENSIONS),
+        key=lambda x: x.name.lower(),
+    )
+    entries: list[SongFileMeta] = []
+    for p in files:
+        stat = p.stat()
+        entries.append(
+            SongFileMeta(
+                name=p.name,
+                size=stat.st_size,
+                modified_at=_iso_utc(stat.st_mtime),
+                url=_song_file_url(dir_name, p.name),
+            )
+        )
+    return entries
+
+
+@audio_router.get("/songs/dirs/{dir_name}/{filename}")
+async def serve_song_dir_file(dir_name: str, filename: str):
+    """Serve a raw audio file from a song directory."""
+    _validate_song_dir(dir_name)
+    _validate_song_filename(filename)
+    path = _song_file_path(dir_name, filename)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Song '{filename}' not found in '{dir_name}'."
+        )
+    media_type = _SONG_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=filename)
