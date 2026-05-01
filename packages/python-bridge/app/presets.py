@@ -139,8 +139,8 @@ def get_random_preset(dir_name: Optional[str] = None) -> Optional[Dict[str, str]
         candidates = _preset_index.get(dir_name, [])
         chosen_dir = dir_name
     else:
-        # Pick a random dir that has entries
-        available = [(d, f) for d, f in _preset_index.items() if f]
+        # Pick a random dir that has entries (exclude custom_milk from the "any" pool)
+        available = [(d, f) for d, f in _preset_index.items() if f and d != "custom_milk"]
         if not available:
             return None
         chosen_dir, candidates = random.choice(available)

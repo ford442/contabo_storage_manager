@@ -1572,7 +1572,7 @@ async def get_random_preset(dir: Optional[str] = Query("any"), request: Request 
     # Fallback: scan local directories directly if cache is empty
     if not result:
         candidates = []
-        dirs_to_check = [dir] if dir != "any" else presets.PRESET_DIRS
+        dirs_to_check = [dir] if dir != "any" else [d for d in presets.PRESET_DIRS if d != "custom_milk"]
         for d in dirs_to_check:
             if d not in presets.PRESET_DIRS:
                 continue
