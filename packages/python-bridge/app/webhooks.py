@@ -16,6 +16,8 @@ from .models import FileUploadResponse
 from .ftp_client import ftp_client
 from .notes_router import _slugify
 from .flac_client import register_song_with_flac_player
+from pydub import AudioSegment
+from pydub.exceptions import CouldntDecodeError
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +169,35 @@ async def flac_webhook(
         if ext == ".flac":
             # Save locally to audio/music (consistent with /api/songs/upload)
             # and mirror remotely to external_flac_dir
-            result = await _save_upload(file, "audio/music", settings.external_flac_dir)
+            # Normalize to 16-bit / 44.1kHz / stereo FLAC
+            content = await file.read()
+            temp_path = Path("/tmp") / f"{uuid.uuid4()}_{file.filename}"
+            temp_path.write_bytes(content)
+            try:
+                audio = AudioSegment.from_file(str(temp_path))
+            except (CouldntDecodeError, FileNotFoundError):
+                raise HTTPException(status_code=400, detail="Could not decode file. Is ffmpeg installed?")
+
+            base = Path(settings.files_dir)
+            music_dir = base / "audio" / "music"
+            music_dir.mkdir(parents=True, exist_ok=True)
+            storage_filename = f"{uuid.uuid4().hex[:8]}_{temp_path.stem}.flac"
+            dest = music_dir / storage_filename
+            audio = audio.set_frame_rate(44100)
+            audio = audio.set_channels(2)
+            audio = audio.set_sample_width(3)  # 24-bit (stored as s32)
+            audio.export(dest, format="flac", parameters=["-compression_level", "8"])
+            temp_path.unlink(missing_ok=True)
+
+            local_rel_path = f"audio/music/{storage_filename}"
+            remote_rel_path = f"{settings.external_flac_dir}/{storage_filename}"
+            remote_path = await ftp_client.upload(dest, remote_rel_path)
+
+            result = {
+                "local_path": local_rel_path,
+                "remote_path": remote_path,
+                "size_bytes": dest.stat().st_size
+            }
         elif ext in (".wav", ".aiff", ".aif"):
             rel_dir = "audio/wav"
             result = await _save_upload(file, rel_dir)

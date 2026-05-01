@@ -121,8 +121,14 @@ class StorageFTPClient:
                 except:
                     pass
 
-    def sync_mods_from_remote(self, local_dir: Path) -> dict:
-        """Download MOD files from remote FTP/SFTP to local directory.
+    def sync_dir_from_remote(self, remote_rel_dir: str, local_dir: Path, extensions: tuple[str, ...] = (), remove_stale: bool = False) -> dict:
+        """Sync a remote directory to local, downloading new/changed files.
+
+        Args:
+            remote_rel_dir: Relative directory path on remote (e.g. 'flac_songs')
+            local_dir: Local directory path to sync into
+            extensions: If provided, only sync files with these extensions
+            remove_stale: If True, delete local files not present on remote
 
         Returns:
             dict with keys: downloaded, skipped, removed, errors, total
@@ -133,7 +139,7 @@ class StorageFTPClient:
             logger.warning("FTP sync skipped: credentials not configured")
             return result
 
-        remote_mods_dir = f"{self.base_dir.rstrip('/')}/mods"
+        remote_dir = f"{self.base_dir.rstrip('/')}/{remote_rel_dir.lstrip('/')}"
         local_dir = Path(local_dir)
         local_dir.mkdir(parents=True, exist_ok=True)
 
@@ -144,34 +150,48 @@ class StorageFTPClient:
 
             # List remote files
             if is_sftp:
-                remote_files = conn.listdir(remote_mods_dir)
+                remote_entries = conn.listdir(remote_dir)
             else:
-                conn.cwd(remote_mods_dir)
-                remote_files = conn.nlst()
+                conn.cwd(remote_dir)
+                remote_entries = conn.nlst()
+
+            remote_files = []
+            for entry in remote_entries:
+                # Filter by extension if specified
+                if extensions:
+                    if not any(entry.lower().endswith(ext.lower()) for ext in extensions):
+                        continue
+                remote_files.append(entry)
 
             result["total"] = len(remote_files)
-            remote_set = set()
+            remote_set = set(remote_files)
 
             for filename in remote_files:
-                remote_set.add(filename)
-                remote_path = f"{remote_mods_dir}/{filename}"
+                remote_path = f"{remote_dir}/{filename}"
                 local_path = local_dir / filename
 
                 try:
                     if is_sftp:
-                        remote_size = conn.stat(remote_path).st_size
+                        remote_stat = conn.stat(remote_path)
+                        remote_size = remote_stat.st_size
+                        remote_mtime = remote_stat.st_mtime
                     else:
                         remote_size = conn.size(filename)
+                        remote_mtime = None
                 except Exception:
                     remote_size = None
+                    remote_mtime = None
 
                 if local_path.exists():
                     local_size = local_path.stat().st_size
+                    local_mtime = local_path.stat().st_mtime
+                    # Skip if same size and local is newer or same age
                     if remote_size is not None and local_size == remote_size:
-                        result["skipped"] += 1
-                        continue
+                        if remote_mtime is None or local_mtime >= remote_mtime:
+                            result["skipped"] += 1
+                            continue
 
-                logger.info("Downloading %s", filename)
+                logger.info("Downloading %s from %s", filename, remote_rel_dir)
                 try:
                     if is_sftp:
                         conn.get(remote_path, str(local_path))
@@ -183,16 +203,17 @@ class StorageFTPClient:
                     logger.error("Failed to download %s: %s", filename, exc)
                     result["errors"] += 1
 
-            # Remove local files not present on remote
-            for local_file in local_dir.iterdir():
-                if local_file.is_file() and local_file.name not in remote_set:
-                    if local_file.suffix.lower() in ('.mod', '.xm', '.s3m', '.it', '.mptm', '.stm', '.669', '.amf', '.ams', '.dbm', '.dmf', '.dsm', '.far', '.gdm', '.j2b', '.mdl', '.med', '.mtm', '.okt', '.psm', '.ptm', '.ult', '.umx', '.mt2', '.mo3'):
-                        local_file.unlink()
-                        result["removed"] += 1
-                        logger.info("Removed stale local file %s", local_file.name)
+            # Remove stale local files if requested
+            if remove_stale:
+                for local_file in local_dir.iterdir():
+                    if local_file.is_file() and local_file.name not in remote_set:
+                        if not extensions or any(local_file.name.lower().endswith(ext.lower()) for ext in extensions):
+                            local_file.unlink()
+                            result["removed"] += 1
+                            logger.info("Removed stale local file %s", local_file.name)
 
         except Exception as exc:
-            logger.error("FTP sync failed: %s", exc)
+            logger.error("FTP sync failed for %s: %s", remote_rel_dir, exc)
         finally:
             if conn:
                 try:
@@ -203,9 +224,18 @@ class StorageFTPClient:
                 except Exception:
                     pass
 
-        logger.info("MOD sync from FTP: %d downloaded, %d skipped, %d removed, %d errors, %d total",
-                    result["downloaded"], result["skipped"], result["removed"], result["errors"], result["total"])
+        logger.info("Sync %s: %d downloaded, %d skipped, %d removed, %d errors, %d total",
+                    remote_rel_dir, result["downloaded"], result["skipped"], result["removed"], result["errors"], result["total"])
         return result
+
+    def sync_mods_from_remote(self, local_dir: Path) -> dict:
+        """Download MOD files from remote FTP/SFTP to local directory."""
+        return self.sync_dir_from_remote(
+            "mods",
+            local_dir,
+            extensions=('.mod', '.xm', '.s3m', '.it', '.mptm', '.stm', '.669', '.amf', '.ams', '.dbm', '.dmf', '.dsm', '.far', '.gdm', '.j2b', '.mdl', '.med', '.mtm', '.okt', '.psm', '.ptm', '.ult', '.umx', '.mt2', '.mo3'),
+            remove_stale=True
+        )
 
 
 # Global helper function used in webhooks.py

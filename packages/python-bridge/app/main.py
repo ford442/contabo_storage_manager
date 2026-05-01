@@ -26,6 +26,7 @@ from .mod_router import mod_router
 from .presets_router import presets_router
 from .textures_router import textures_router
 from .file_watcher import start_watching
+from .remote_sync import start_remote_sync
 from . import presets
 
 
@@ -63,6 +64,7 @@ app.add_middleware(
 async def startup_event():
     logger.info("Starting file watcher for %s", settings.files_dir)
     start_watching(settings.files_dir)
+    start_remote_sync()
     presets.load_index()
     stats = presets.get_index_stats()
     logger.info(

@@ -20,6 +20,18 @@ from . import presets
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
+
+def normalize_audio_to_flac(audio: AudioSegment, dest: Path) -> AudioSegment:
+    """Normalize audio to 16-bit / 44.1kHz / stereo FLAC and export.
+
+    This matches the format of the reference files at noahcohn.com/songs.
+    """
+    audio = audio.set_frame_rate(44100)
+    audio = audio.set_channels(2)
+    audio = audio.set_sample_width(3)  # 24-bit (stored as s32)
+    audio.export(dest, format="flac", parameters=["-compression_level", "8"])
+    return audio
+
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/api", tags=["api"])
 
@@ -1013,9 +1025,9 @@ async def upload_song(
         except (CouldntDecodeError, FileNotFoundError):
             raise HTTPException(status_code=400, detail="Could not decode file. Is ffmpeg installed on the server?")
 
-        # Export to high-quality FLAC
+        # Export to standard FLAC (16-bit / 44.1kHz / stereo)
         dest = music_dir / storage_filename
-        audio.export(dest, format="flac", parameters=["-compression_level", "8"])
+        audio = normalize_audio_to_flac(audio, dest)
         duration_sec = len(audio) / 1000.0
         size_bytes = dest.stat().st_size if dest.exists() else len(content)
     finally:
