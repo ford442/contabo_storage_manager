@@ -1,4 +1,5 @@
 <!-- From: /root/contabo_storage_manager/AGENTS.md -->
+<!-- From: /root/contabo_storage_manager/AGENTS.md -->
 # AGENTS.md – Contabo Storage Manager
 
 > This file contains essential context for AI coding agents working on this project.  
@@ -29,6 +30,7 @@ Internet ──→ (nginx / Caddy / direct)
                │             ├── Models    → /models/* (Range/HEAD support for WebLLM)
                │             ├── Mods      → /api/mods/* (MOD music files)
                │             ├── Presets   → /api/presets/* (MilkDrop .milk files)
+               │             ├── Textures  → /api/textures/* (image textures)
                │             ├── Static    → /files/{path}
                │             └── Remote    → /api/admin/run, /api/admin/logs/{task_id}
                │
@@ -49,6 +51,8 @@ The Python bridge serves a universal upload dashboard at `GET /admin`. It suppor
 - Audio (`.mp3`, `.flac`, `.wav`, `.ogg`, `.m4a`, `.aac`) → `/api/songs/upload`
 - Notes (`.md`) → `/api/notes/write/{name}`
 - Shaders (`.wgsl`, `.json`) → `/api/shaders`
+
+The admin panel also supports remote SSH command execution via `POST /api/admin/run` (whitelisted commands only) and SSE log streaming via `GET /api/admin/logs/{task_id}`.
 
 ---
 
@@ -101,9 +105,9 @@ contabo_storage_manager/
 │   │   │   ├── main.py         # FastAPI app entry + CORS + admin routes
 │   │   │   ├── webhooks.py     # Webhook route handlers + static /files
 │   │   │   ├── api.py          # Shaders, maps, images, flac_player song API
-│   │   │   ├── api_full.py     # Extended API router variant
-│   │   │   ├── api_shim.py     # Compatibility shim router
-│   │   │   ├── api_simple.py   # Minimal API router variant
+│   │   │   ├── api_full.py     # Extended API router variant (unused in main.py)
+│   │   │   ├── api_shim.py     # Compatibility shim router (unused)
+│   │   │   ├── api_simple.py   # Minimal API router variant (unused)
 │   │   │   ├── audio_router.py # Pachinball music & samples API
 │   │   │   ├── sequencer_router.py  # web_sequencer cloud storage API
 │   │   │   ├── notes_router.py      # Plain-text markdown notes API
@@ -114,12 +118,14 @@ contabo_storage_manager/
 │   │   │   ├── models_router.py      # Model serving with Range/HEAD support
 │   │   │   ├── mod_router.py         # MOD music file indexing & metadata
 │   │   │   ├── presets_router.py     # MilkDrop preset upload/list/download
+│   │   │   ├── textures_router.py    # Image texture upload/list/download
 │   │   │   ├── presets.py            # Preset index loader (startup)
 │   │   │   ├── cors.py               # CORS middleware options builder
 │   │   │   ├── flac_client.py        # External FLAC Player registration client
 │   │   │   ├── file_watcher.py       # Background watchdog auto-indexer
 │   │   │   ├── ftp_client.py         # FTPS + SFTP upload client
-│   │   │   ├── sync.py               # Background external API polling loop
+│   │   │   ├── remote_sync.py        # Background remote-to-local sync loop
+│   │   │   ├── sync.py               # Legacy background external API polling loop
 │   │   │   ├── config.py             # pydantic-settings configuration
 │   │   │   ├── models.py             # Shared Pydantic models
 │   │   │   ├── logger.py             # Structured logger setup
@@ -197,6 +203,12 @@ contabo_storage_manager/
 
 ### Python Bridge (port 8000)
 
+#### Root & Health
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/` | Media gallery placeholder page |
+| `GET`  | `/health` | Health check (includes storage writable test) |
+
 #### Webhooks
 | Method | Path | Description |
 |--------|------|-------------|
@@ -207,16 +219,15 @@ contabo_storage_manager/
 | `POST` | `/webhook/sequencer` | web_sequencer multipart upload |
 | `POST` | `/webhook/notes` | cloud_notes structured note data |
 
-#### APIs
+#### Admin
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/api/health` | Health check (includes storage writable test) |
 | `GET`  | `/admin` | Universal upload dashboard |
 | `POST` | `/api/admin/sync-music` | Trigger GCS music sync |
 | `POST` | `/api/admin/run` | Run remote SSH command (whitelisted) |
 | `GET`  | `/api/admin/logs/{task_id}` | Stream remote command logs (SSE) |
 
-**Shaders & Maps**
+#### Shaders & Maps
 | `GET`  | `/api/shaders` | List shaders with pagination/filtering |
 | `POST` | `/api/shaders` | Create shader |
 | `GET`  | `/api/shaders/{id}` | Get shader metadata |
@@ -225,7 +236,7 @@ contabo_storage_manager/
 | `GET`  | `/api/shaders/{id}/code` | Get WGSL source |
 | `GET`  | `/api/maps` | List LCD table maps |
 
-**Music Library (flac_player)**
+#### Music Library (flac_player)
 | `GET`  | `/api/songs` | List songs |
 | `GET`  | `/api/songs/stats` | Library statistics |
 | `GET`  | `/api/songs/{id}` | Get song metadata |
@@ -235,7 +246,7 @@ contabo_storage_manager/
 | `GET`  | `/api/music/{song_id}` | Stream audio file |
 | `POST` | `/api/songs/upload` | Upload audio file |
 
-**Sequencer (web_sequencer)**
+#### Sequencer (web_sequencer)
 | `GET`  | `/api/songs` | List sequencer songs |
 | `POST` | `/api/songs` | Upload song JSON |
 | `GET`  | `/api/songs/{id}` | Get song data |
@@ -248,7 +259,7 @@ contabo_storage_manager/
 | `POST` | `/api/samples` | Upload audio sample |
 | `GET`  | `/api/items` | List all items (HuggingFace compat) |
 
-**Notes (rain_edit / cloud_notes)**
+#### Notes (rain_edit / cloud_notes)
 | `GET`  | `/api/notes/list` | List all notes |
 | `GET`  | `/api/notes/read/{name}` | Read a note |
 | `POST` | `/api/notes/write/{name}` | Write a note |
@@ -257,7 +268,7 @@ contabo_storage_manager/
 | `POST` | `/api/notes/sync/batch` | Batch sync notes |
 | `DELETE`| `/api/notes/delete/{name}` | Delete a note |
 
-**Pachinball**
+#### Pachinball
 | `GET`  | `/maps` | List maps |
 | `GET`  | `/maps/{id}` | Get map config |
 | `POST` | `/maps` | Create map |
@@ -273,7 +284,7 @@ contabo_storage_manager/
 | `GET`  | `/zones` | Zone manifest |
 | `GET`  | `/files/{path}` | Serve pachinball static files |
 
-**Leaderboard & Adventure**
+#### Leaderboard & Adventure
 | `GET`  | `/api/leaderboard` | Get high scores |
 | `POST` | `/api/leaderboard` | Submit score |
 | `GET`  | `/api/adventure/progress` | Get progress |
@@ -281,14 +292,14 @@ contabo_storage_manager/
 | `GET`  | `/api/adventure/levels` | List levels |
 | `POST` | `/api/adventure/complete-level/{id}` | Complete level |
 
-**VPS Browser**
+#### VPS Browser
 | `GET`  | `/api/vps/browse?path=` | List directory |
 | `GET`  | `/api/vps/file?path=` | Download file |
 | `POST` | `/api/vps/upload` | Upload file |
 | `PUT`  | `/api/vps/file` | Overwrite file |
 | `DELETE`| `/api/vps/file?path=` | Delete file |
 
-**Models (WebLLM / TTS)**
+#### Models (WebLLM / TTS)
 | `GET`  | `/models/health` | Model serving health |
 | `GET`  | `/models/list` | List available models |
 | `GET`  | `/models/{model_id}/{file_path}` | Serve model file with Range support |
@@ -296,7 +307,7 @@ contabo_storage_manager/
 | `GET`  | `/models/tts/list` | List TTS models |
 | `GET`  | `/models/tts/health` | TTS model health |
 
-**MOD Music**
+#### MOD Music
 | `GET`  | `/api/mods` | List MOD files with metadata (search/tag filter) |
 | `GET`  | `/api/mods/scan` | Sync from remote FTP + scan directory + rebuild index |
 | `POST` | `/api/mods/reindex` | Re-extract metadata for all indexed mods |
@@ -304,12 +315,23 @@ contabo_storage_manager/
 | `PATCH`| `/api/mods/{mod_id}` | Update MOD metadata |
 | `GET`  | `/api/mods/{mod_id}/download` | Download MOD file (CORS-safe proxy) |
 
-**MilkDrop Presets**
+#### MilkDrop Presets
 | `GET`  | `/api/presets/` | List preset directories with counts |
 | `GET`  | `/api/presets/{dir_name}` | List `.milk` files in a directory |
 | `GET`  | `/api/presets/{dir_name}/{filename}` | Get raw preset content |
 | `POST` | `/api/presets/{dir_name}` | Upload/overwrite a `.milk` file |
 | `DELETE`| `/api/presets/{dir_name}/{filename}` | Delete a `.milk` file |
+
+#### Textures
+| `GET`  | `/api/textures/` | List texture directories with counts |
+| `GET`  | `/api/textures/{dir_name}` | List image files in a directory |
+| `GET`  | `/api/textures/{dir_name}/{filename}` | Serve texture image file |
+| `POST` | `/api/textures/{dir_name}` | Upload a texture file |
+| `DELETE`| `/api/textures/{dir_name}/{filename}` | Delete a texture file |
+
+#### Redirects (Backwards Compatibility)
+| `GET` | `/music` | 307 redirect to `/api/music` |
+| `GET` | `/leaderboard` | 307 redirect to `/api/leaderboard` |
 
 #### Static Files
 | `GET` | `/files/{path:path}` | Serve stored files with correct MIME types |
@@ -429,6 +451,7 @@ Copy `.env.example` to `.env` and configure:
 | `EXTERNAL_API_KEY` | *(empty)* | Bearer token for external API |
 | `POLL_INTERVAL_SECONDS` | `60` | Polling interval |
 | `FLAC_PLAYER_API_URL` | *(empty)* | External FLAC Player backend URL for auto-registration |
+| `EXTERNAL_FLAC_DIR` | `flac_songs` | Remote folder for FLAC song mirroring |
 
 ---
 
@@ -562,6 +585,7 @@ systemctl restart contabo-storage-node
 - Max upload size configurable via `MAX_UPLOAD_MB` (default 8192 MB)
 - Notes API validates names with regex `^[a-zA-Z0-9_\-\.]+$` and rejects traversal sequences
 - Preset API rejects filenames with `..`, `/`, `\`, or non-`.milk` extensions
+- Texture API rejects filenames with `..`, `/`, `\`, or unsupported extensions
 
 ### Network Security
 - FTP/SFTP connections use TLS when `FTP_TLS=true`
@@ -621,6 +645,9 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 ├── mods/                      # MOD music files + index.json
 ├── models/                    # ML models for WebLLM / TTS
 │   └── tts/
+├── textures/                  # Image textures (PNG, JPG, WEBP, etc.)
+├── weeks_textures/            # Weekly texture pool
+├── custom_textures/           # User-uploaded custom textures
 ├── milk/                      # MilkDrop presets (default pool)
 ├── milkSML/                   # MilkDrop presets (small pool)
 ├── milkMED/                   # MilkDrop presets (medium pool)
@@ -636,16 +663,19 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 
 ### Python Bridge
 - Uses `pydantic-settings` for environment-based configuration
-- FTP client supports both FTPS (port 21) and SFTP (port 22) via paramiko
+- FTP client (`ftp_client.py`) supports both FTPS (port 21) and SFTP (port 22) via paramiko. The `StorageFTPClient` class auto-selects the protocol based on port number.
 - Static files served with correct MIME types for audio/video/model files
 - Background file watcher (`watchdog`) auto-indexes new audio files into `songs.json`
-- Admin panel supports remote SSH command execution via `asyncssh`
+- Background remote sync (`remote_sync.py`) polls external SFTP directories every 5 minutes and downloads new/changed files for audio, textures, and presets
+- Admin panel supports remote SSH command execution via `asyncssh` with a strict whitelist (`git-pull`, `npm-install`, `npm-build`, `restart-service`, `sync-indexes`, `sync-music`)
 - Model router implements full HTTP Range request support for WebLLM chunked downloads
-- `flac_client.py` optionally registers uploaded audio with an external FLAC Player backend
+- `flac_client.py` optionally registers uploaded audio with an external FLAC Player backend (both async and sync variants)
 - Uploaded FLAC files are mirrored to the external SFTP host under `EXTERNAL_FLAC_DIR` (default `flac_songs`) as a best-effort operation
 - `mod_router.py` uses `openmpt123 --info` to extract title, tracker (author), and duration from MOD files
 - `presets_router.py` whitelists 5 preset directories and enforces `.milk` extension; paths are resolved via a static mapping dict to prevent traversal
+- `textures_router.py` whitelists 3 texture directories and enforces image extensions (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tga`)
 - `cors.py` builds `CORSMiddleware` options dynamically: credentials are disabled when `*` is present in origins
+- `main.py` registers 13 routers in a specific order and installs both `CORSMiddleware` and a fallback `add_cors_headers` middleware
 
 ### Node Bridge
 - Raw body capture middleware for HMAC verification
