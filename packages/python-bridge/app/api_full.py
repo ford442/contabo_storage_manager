@@ -15,9 +15,10 @@ from enum import Enum
 import io
 from ftplib import FTP
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, PlainTextResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from aiocache import Cache
 
@@ -63,6 +64,51 @@ bucket = None
 io_executor = ThreadPoolExecutor(max_workers=20)
 cache = Cache(Cache.MEMORY)
 INDEX_LOCK = asyncio.Lock()
+
+# ------------------------ structured logging ------------------------
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+_logger = logging.getLogger("storage_manager")
+_logger.setLevel(logging.DEBUG)
+if not _logger.handlers:
+    _logger.addHandler(_log_handler)
+    _logger.propagate = False
+
+
+def _log_event(event: str, level: str = "info", **kwargs):
+    payload = {"event": event, "ts": datetime.utcnow().isoformat() + "Z", **kwargs}
+    message = json.dumps(payload, default=str)
+    if level == "debug":
+        _logger.debug(message)
+    elif level == "warning":
+        _logger.warning(message)
+    else:
+        _logger.info(message)
+
+
+async def cache_get(key):
+    value = await cache.get(key)
+    if value is None:
+        _log_event("cache_miss", level="debug", key=key)
+    else:
+        _log_event("cache_hit", level="debug", key=key)
+    return value
+
+
+async def cache_set(key, value, ttl=None):
+    await cache.set(key, value, ttl=ttl)
+    _log_event("cache_set", level="debug", key=key, ttl=ttl)
+
+
+async def cache_delete(key):
+    await cache.delete(key)
+    _log_event("cache_delete", level="debug", key=key)
+
+
+async def cache_clear():
+    await cache.clear()
+    _log_event("cache_clear", level="debug")
+
 
 # ========================= HELPERS =========================
 def get_gcs_client():
@@ -134,6 +180,52 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    _log_event(
+        "http_exception",
+        level="warning",
+        path=str(request.url),
+        method=request.method,
+        status_code=exc.status_code,
+        detail=str(exc.detail)
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": str(exc.detail) if exc.detail else "HTTP error", "code": str(exc.status_code)}
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    _log_event(
+        "validation_error",
+        level="warning",
+        path=str(request.url),
+        method=request.method,
+        errors=exc.errors()
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Validation error", "code": "validation_error", "details": exc.errors()}
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    _log_event(
+        "unhandled_exception",
+        level="error",
+        path=str(request.url),
+        method=request.method,
+        error=str(exc)
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "code": "internal_error"}
+    )
+
 # ========================= CORS =========================
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -181,6 +273,27 @@ class MetaData(BaseModel):
     stars: Optional[float] = None
     rating_count: Optional[int] = None
     play_count: Optional[int] = None
+    updated_at: Optional[str] = None
+    thumbnail: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+
+class ShaderMeta(MetaData):
+    thumbnail: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    category: Optional["ShaderCategory"] = None
+    params: Optional[List["ShaderParam"]] = None
+
+class ShaderUploadPayload(BaseModel):
+    name: str
+    author: str
+    description: Optional[str] = ""
+    tags: Optional[List[str]] = Field(default_factory=list)
+    category: Optional["ShaderCategory"] = None
+    coordinate: Optional[int] = None
+    params: Optional[List["ShaderParam"]] = None
+
+class ShaderListResponse(BaseModel):
+    shaders: List["ShaderMeta"]
 
 # --- GCS I/O HELPERS ---
 def _read_json_sync(blob_path):
@@ -195,80 +308,184 @@ def _write_json_sync(blob_path, data):
         json.dumps(data),
         content_type='application/json'
     )
+
+class AssetService:
+    """Abstraction layer for asset index operations and cache management.
+
+    The service centralizes reading and writing GCS-backed JSON indexes,
+    applying an asyncio lock on index writes and invalidating cached results
+    for affected asset categories.
+    """
+
+    def __init__(self, storage_map=None, index_lock=None, cache_obj=None):
+        self.storage_map = storage_map or STORAGE_MAP
+        self.index_lock = index_lock or INDEX_LOCK
+        self.cache = cache_obj or cache
+
+    def get_index_config(self, type: str):
+        """Return the storage configuration for a given asset type.
+
+        Falls back to the default configuration when the requested type
+        is not explicitly mapped.
+        """
+        return self.storage_map.get(type, self.storage_map["default"])
+
+    async def read_index(self, type: str) -> list:
+        """Read and return the JSON index for the requested asset type.
+
+        Returns an empty list if the index file is missing or malformed.
+        """
+        config = self.get_index_config(type)
+        result = await run_io(_read_json_sync, config["index"])
+        return result if isinstance(result, list) else []
+
+    async def write_index(self, type: str, data: list):
+        """Write a complete index payload and clear related cached entries."""
+        config = self.get_index_config(type)
+        async with self.index_lock:
+            await run_io(_write_json_sync, config["index"], data)
+            await self.clear_cache(type)
+        _log_event("index_write", type=type, index=config["index"], count=len(data))
+
+    def create_meta(self, payload, item_type: str, item_id: str) -> dict:
+        """Build a normalized metadata dictionary for an indexed asset.
+
+        Accepts either a dict or a Pydantic model and returns an index-ready
+        JSON-compatible metadata dictionary.
+        """
+        values = {}
+        if hasattr(payload, "dict") and callable(payload.dict):
+            values = payload.dict()
+        elif isinstance(payload, dict):
+            values = payload
+        else:
+            values = {
+                key: getattr(payload, key)
+                for key in dir(payload)
+                if not key.startswith("_") and hasattr(payload, key)
+            }
+
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "id": item_id,
+            "type": item_type,
+            "name": values.get("name") or "",
+            "author": values.get("author") or "Unknown",
+            "description": values.get("description") or "",
+            "date": values.get("date") or now,
+            "filename": values.get("filename") or values.get("name") or "",
+            "rating": values.get("rating"),
+            "genre": values.get("genre"),
+            "last_played": values.get("last_played"),
+            "tags": values.get("tags") or [],
+            "coordinate": values.get("coordinate"),
+            "stars": values.get("stars"),
+            "rating_count": values.get("rating_count"),
+            "play_count": values.get("play_count"),
+            "updated_at": values.get("updated_at"),
+            "thumbnail": values.get("thumbnail"),
+            "thumbnail_url": values.get("thumbnail_url"),
+            "category": values.get("category"),
+        }
+
+    async def clear_cache(self, type: str = None):
+        """Clear cached entries for a single type or flush the entire cache."""
+        if type is None:
+            await self.cache.clear()
+            return
+
+        type_terms = [f"{type}:", f":{type}", f"{type}s", f"{type}_", f"{type}-"]
+        if hasattr(self.cache, "keys"):
+            try:
+                keys = await self.cache.keys("*")
+                for key in keys:
+                    if any(term in key for term in type_terms) or key == "library:all":
+                        await self.cache.delete(key)
+                return
+            except Exception:
+                pass
+
+        await self.cache.clear()
+
+asset_service = AssetService()
 # --- ENDPOINTS ---
 @app.get("/")
 def home():
     return {"status": "online", "provider": "Google Cloud Storage"}
 # --- 0.5 HEALTH CHECK & TEST DATA ---
 @app.post("/api/admin/sync-music")
-async def sync_music_folder():
-    """Scans the music/ folder and rebuilds the music index."""
+async def sync_music_folder(type: Optional[str] = Query(None, alias="type")):
+    """Scans the music/ folder and rebuilds the music index.
+
+    Optional ?type=music only allows targeting the music type explicitly.
+    """
+    if type is not None and type != "music":
+        raise HTTPException(400, "sync-music only supports type=music")
+
     config = STORAGE_MAP["music"]
     report = {"added": 0, "removed": 0}
 
-    async with INDEX_LOCK:
-        try:
-            # 1. List all files in music/
-            blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
+    try:
+        blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
 
-            # Filter for audio files (FLAC, WAV, MP3)
-            audio_files = []
-            for b in blobs:
-                fname = b.name.replace(config["folder"], "")
-                if fname and not b.name.endswith(config["index"]):
-                    lower = fname.lower()
-                    if lower.endswith(('.flac', '.wav', '.mp3', '.ogg')):
-                        audio_files.append({
-                            "filename": fname,
-                            "name": fname,
-                            "size": b.size,
-                            "url": b.public_url
-                        })
+        audio_files = []
+        for b in blobs:
+            fname = b.name.replace(config["folder"], "")
+            if fname and not b.name.endswith(config["index"]):
+                lower = fname.lower()
+                if lower.endswith((".flac", ".wav", ".mp3", ".ogg")):
+                    audio_files.append({
+                        "filename": fname,
+                        "name": fname,
+                        "size": b.size,
+                        "url": b.public_url
+                    })
 
-            # 2. Get current index
-            index_data = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index_data, list):
-                index_data = []
+        index_data = await asset_service.read_index("music")
+        if not isinstance(index_data, list):
+            index_data = []
 
-            # 3. Compare and update
-            index_map = {item["filename"]: item for item in index_data}
-            disk_set = set(f["filename"] for f in audio_files)
+        index_map = {item["filename"]: item for item in index_data}
+        disk_set = set(f["filename"] for f in audio_files)
 
-            # Remove missing files
-            new_index = [item for item in index_data if item["filename"] in disk_set]
-            report["removed"] = len(index_data) - len(new_index)
+        new_index = [item for item in index_data if item["filename"] in disk_set]
+        report["removed"] = len(index_data) - len(new_index)
 
-            # Add new files
-            for file_info in audio_files:
-                if file_info["filename"] not in index_map:
-                    new_entry = {
-                        "id": str(uuid.uuid4()),
-                        "filename": file_info["filename"],
-                        "name": file_info["name"],
-                        "type": "music",
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "author": "Unknown",
-                        "description": "",
-                        "rating": None,
-                        "genre": None,
-                        "last_played": None,
-                        "url": file_info["url"],
-                        "size": file_info["size"]
-                    }
-                    new_index.insert(0, new_entry)
-                    report["added"] += 1
+        for file_info in audio_files:
+            if file_info["filename"] not in index_map:
+                new_entry = {
+                    "id": str(uuid.uuid4()),
+                    "filename": file_info["filename"],
+                    "name": file_info["name"],
+                    "type": "music",
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "author": "Unknown",
+                    "description": "",
+                    "rating": None,
+                    "genre": None,
+                    "last_played": None,
+                    "url": file_info["url"],
+                    "size": file_info["size"],
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                }
+                new_index.insert(0, new_entry)
+                report["added"] += 1
 
-            if report["added"] > 0 or report["removed"] > 0:
-                await run_io(_write_json_sync, config["index"], new_index)
+        for item in new_index:
+            if "updated_at" not in item:
+                item["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            await cache.delete("library:music")
-            await cache.delete("library:all")
+        if report["added"] > 0 or report["removed"] > 0:
+            await asset_service.write_index("music", new_index)
 
-            report["total"] = len(new_index)
-            return report
+        await cache_delete("library:music")
+        await cache_delete("library:all")
 
-        except Exception as e:
-            raise HTTPException(500, f"Failed to sync music: {str(e)}")
+        report["total"] = len(new_index)
+        _log_event("sync_music_folder", type=type, report=report)
+        return report
+    except Exception as e:
+        raise HTTPException(500, f"Failed to sync music: {str(e)}")
 @app.post("/api/admin/seed-test-samples")
 async def seed_test_samples():
     """Creates test sample entries for development."""
@@ -325,8 +542,8 @@ async def seed_test_samples():
                     added += 1
 
             await run_io(_write_json_sync, config["index"], index_data)
-            await cache.delete("library:sample")
-            await cache.delete("library:all")
+            await cache_delete("library:sample")
+            await cache_delete("library:all")
 
             return {"success": True, "added": added, "total": len(index_data)}
         except Exception as e:
@@ -348,6 +565,7 @@ async def health_check():
 # --- 1. LISTING (Cached) ---
 class SortBy(str, Enum):
     date = "date"
+    updated_at = "updated_at"
     rating = "rating"
     name = "name"
     last_played = "last_played"
@@ -385,10 +603,15 @@ class MetaPatch(BaseModel):
     last_played: Optional[str] = None
     coordinate: Optional[int] = None  # NEW
     params: Optional[List[ShaderParam]] = None  # Shader parameter definitions
+    updated_at: Optional[str] = None
 
 class CoordinateSyncPayload(BaseModel):
     coordinates: dict
     overwrite: bool = False
+
+ShaderMeta.update_forward_refs()
+ShaderUploadPayload.update_forward_refs()
+ShaderListResponse.update_forward_refs()
 
 # ========================= GCS I/O HELPERS =========================
 def _read_json_sync(blob_path):
@@ -813,30 +1036,29 @@ async def ratings_ui():
 
 # ========================= SHADER ENDPOINTS =========================
 
-@app.get("/api/shaders")
+@app.get("/api/shaders", response_model=List[ShaderMeta])
 async def list_shaders(
     category: Optional[ShaderCategory] = Query(None),
     min_stars: float = Query(0.0, ge=0, le=5),
     sort_by: SortBy = Query(SortBy.rating)
 ):
     cache_key = f"shaders:list:{category}:{min_stars}:{sort_by}"
-    cached = await cache.get(cache_key)
+    cached = await cache_get(cache_key)
     if cached:
         return cached
-    
-    config = STORAGE_MAP["shader"]
+
     try:
-        index = await run_io(_read_json_sync, config["index"])
-        if not isinstance(index, list):
-            index = []
-        
-        # Filters
+        index = await asset_service.read_index("shader")
+
         if category:
-            index = [s for s in index if category.value in s.get("tags", []) or category.value.lower() in s.get("description", "").lower()]
+            index = [
+                s for s in index
+                if category.value in s.get("tags", [])
+                or category.value.lower() in s.get("description", "").lower()
+            ]
         if min_stars > 0:
             index = [s for s in index if s.get("stars", 0) >= min_stars]
-        
-        # Sort
+
         reverse = sort_by in [SortBy.rating, SortBy.date, SortBy.last_played]
         if sort_by is SortBy.rating:
             index.sort(key=lambda s: s.get("stars", 0), reverse=reverse)
@@ -847,35 +1069,34 @@ async def list_shaders(
         elif sort_by is SortBy.coordinate:
             index.sort(key=lambda s: s.get("coordinate", 9999))
 
-        # Ensure all shaders have rating defaults
         for shader in index:
             shader.setdefault("stars", 0.0)
             shader.setdefault("rating_count", 0)
             shader.setdefault("play_count", 0)
+            if shader.get("thumbnail"):
+                thumbnail_path = f"{STORAGE_MAP['shader']['folder']}{shader['thumbnail']}"
+                shader["thumbnail_url"] = bucket.blob(thumbnail_path).public_url
 
-        await cache.set(cache_key, index, ttl=300)
+        await cache_set(cache_key, index, ttl=300)
         return index
     except Exception as e:
         raise HTTPException(500, f"Failed to list shaders: {str(e)}")
 
-@app.get("/api/shaders/{shader_id}")
+@app.get("/api/shaders/{shader_id}", response_model=ShaderMeta)
 async def get_shader_meta(shader_id: str):
     """Get shader metadata including stars, rating_count, play_count, coordinate."""
-    config = STORAGE_MAP["shader"]
-    index = await run_io(_read_json_sync, config["index"])
-    if not isinstance(index, list):
-        raise HTTPException(500, "Shader index corrupted")
-    
+    index = await asset_service.read_index("shader")
     entry = next((s for s in index if s.get("id") == shader_id), None)
     if not entry:
         raise HTTPException(404, "Shader not found")
-    
-    # Ensure defaults
+
     entry.setdefault("stars", 0.0)
     entry.setdefault("rating_count", 0)
     entry.setdefault("play_count", 0)
     entry.setdefault("coordinate", None)
-    
+    if entry.get("thumbnail"):
+        thumbnail_path = f"{STORAGE_MAP['shader']['folder']}{entry['thumbnail']}"
+        entry["thumbnail_url"] = bucket.blob(thumbnail_path).public_url
     return entry
 
 @app.post("/api/shaders/{shader_id}/rate")
@@ -883,87 +1104,67 @@ async def rate_shader(shader_id: str, stars: float = Form(...)):
     """Rate a shader 1-5 stars. Updates average and count."""
     if not 1 <= stars <= 5:
         raise HTTPException(400, "Stars must be between 1 and 5")
-    
-    config = STORAGE_MAP["shader"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index = await run_io(_read_json_sync, index_path)
-            if not isinstance(index, list):
-                raise HTTPException(500, "Shader index corrupted")
-            
-            entry = next((s for s in index if s.get("id") == shader_id), None)
-            if not entry:
-                raise HTTPException(404, "Shader not found")
-            
-            # Calculate new average
-            current_stars = entry.get("stars", 0.0)
-            current_count = entry.get("rating_count", 0)
-            
-            new_count = current_count + 1
-            new_stars = ((current_stars * current_count) + stars) / new_count
-            
-            entry["stars"] = round(new_stars, 2)
-            entry["rating_count"] = new_count
-            
-            await run_io(_write_json_sync, index_path, index)
-            await cache.delete(f"shader:{shader_id}")
-            await cache.delete("shaders:list")
-            
-            return {
-                "id": shader_id,
-                "stars": entry["stars"],
-                "rating_count": entry["rating_count"],
-                "your_rating": stars
-            }
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to rate shader {shader_id}: {e}")
-            raise HTTPException(500, f"Rating failed: {str(e)}")
+
+    try:
+        index = await asset_service.read_index("shader")
+        entry = next((s for s in index if s.get("id") == shader_id), None)
+        if not entry:
+            raise HTTPException(404, "Shader not found")
+
+        current_stars = entry.get("stars", 0.0)
+        current_count = entry.get("rating_count", 0)
+        new_count = current_count + 1
+        new_stars = ((current_stars * current_count) + stars) / new_count
+
+        entry["stars"] = round(new_stars, 2)
+        entry["rating_count"] = new_count
+
+        await asset_service.write_index("shader", index)
+        _log_event("rate_shader", shader_id=shader_id, stars=stars, rating_count=entry["rating_count"])
+        return {
+            "id": shader_id,
+            "stars": entry["stars"],
+            "rating_count": entry["rating_count"],
+            "your_rating": stars
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("rate_shader_failed", level="error", shader_id=shader_id, error=str(e))
+        raise HTTPException(500, f"Rating failed: {str(e)}")
 
 @app.post("/api/shaders/{shader_id}/play")
 async def record_shader_play(shader_id: str):
     """Record that a shader was played. Increments play_count."""
-    config = STORAGE_MAP["shader"]
-    index_path = config["index"]
     now = datetime.now().isoformat()
-    
-    async with INDEX_LOCK:
-        try:
-            index = await run_io(_read_json_sync, index_path)
-            if not isinstance(index, list):
-                raise HTTPException(500, "Shader index corrupted")
-            
-            entry = next((s for s in index if s.get("id") == shader_id), None)
-            if not entry:
-                raise HTTPException(404, "Shader not found")
-            
-            entry["play_count"] = (entry.get("play_count") or 0) + 1
-            entry["last_played"] = now
-            
-            await run_io(_write_json_sync, index_path, index)
-            await cache.delete(f"shader:{shader_id}")
-            await cache.delete("shaders:list")
-            
-            return {
-                "success": True,
-                "id": shader_id,
-                "play_count": entry["play_count"],
-                "last_played": now
-            }
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to record play for {shader_id}: {e}")
-            raise HTTPException(500, f"Failed to record play: {str(e)}")
+
+    try:
+        index = await asset_service.read_index("shader")
+        entry = next((s for s in index if s.get("id") == shader_id), None)
+        if not entry:
+            raise HTTPException(404, "Shader not found")
+
+        entry["play_count"] = (entry.get("play_count") or 0) + 1
+        entry["last_played"] = now
+
+        await asset_service.write_index("shader", index)
+        _log_event("record_shader_play", shader_id=shader_id, play_count=entry["play_count"])
+        return {
+            "success": True,
+            "id": shader_id,
+            "play_count": entry["play_count"],
+            "last_played": now
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("record_shader_play_failed", level="error", shader_id=shader_id, error=str(e))
+        raise HTTPException(500, f"Failed to record play: {str(e)}")
 
 @app.post("/api/shaders/upload")
 async def upload_shader(
     file: UploadFile = File(...),
+    thumbnail: UploadFile = File(None),
     name: str = Form(...),
     description: str = Form(""),
     tags: str = Form(""),
@@ -979,8 +1180,7 @@ async def upload_shader(
     config = STORAGE_MAP["shader"]
     full_path = f"{config['folder']}{storage_filename}"
     
-    meta = {
-        "id": shader_id,
+    meta_payload = {
         "name": name,
         "author": author,
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -991,137 +1191,148 @@ async def upload_shader(
         "coordinate": coordinate,
         "stars": 0.0,
         "rating_count": 0,
-        "play_count": 0
+        "play_count": 0,
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "thumbnail": None
     }
-    
-    async with INDEX_LOCK:
-        try:
-            blob = bucket.blob(full_path)
-            await run_io(blob.upload_from_file, file.file, content_type="text/plain")
-            
-            # Add to index
-            index = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index, list):
-                index = []
-            index.insert(0, meta)
-            await run_io(_write_json_sync, config["index"], index)
-            
-            await cache.delete("shaders:list")
-            return {"success": True, "id": shader_id, "meta": meta}
-        except Exception as e:
-            raise HTTPException(500, f"Upload failed: {str(e)}")
+    meta = asset_service.create_meta(meta_payload, "shader", shader_id)
+
+    try:
+        blob = bucket.blob(full_path)
+        await run_io(blob.upload_from_file, file.file, content_type="text/plain")
+
+        if thumbnail is not None:
+            if not thumbnail.filename.lower().endswith(".png"):
+                raise HTTPException(400, "Only .png thumbnails are supported")
+            thumb_path = f"{config['folder']}{shader_id}.png"
+            thumb_blob = bucket.blob(thumb_path)
+            await run_io(thumb_blob.upload_from_file, thumbnail.file, content_type="image/png")
+            meta["thumbnail"] = f"{shader_id}.png"
+            meta["thumbnail_url"] = thumb_blob.public_url
+
+        index = await asset_service.read_index("shader")
+        index.insert(0, meta)
+        await asset_service.write_index("shader", index)
+        _log_event("upload_shader", shader_id=shader_id, filename=storage_filename)
+        return {"success": True, "id": shader_id, "meta": meta}
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {str(e)}")
 
 @app.get("/api/shaders/{shader_id}/code")
 async def get_shader_code(shader_id: str):
     """Returns the actual .wgsl shader code."""
-    config = STORAGE_MAP["shader"]
-    
-    # Find in index
-    index = await run_io(_read_json_sync, config["index"])
-    entry = next((s for s in index if s.get("id") == shader_id), None)
+    entry = next((s for s in await asset_service.read_index("shader") if s.get("id") == shader_id), None)
     if not entry:
         raise HTTPException(404, "Shader not found")
-    
-    blob_path = f"{config['folder']}{entry['filename']}"
+
+    blob_path = f"{STORAGE_MAP['shader']['folder']}{entry['filename']}"
     blob = bucket.blob(blob_path)
     if not await run_io(blob.exists):
         raise HTTPException(404, "Shader file not found")
-    
+
     code = await run_io(blob.download_as_text)
     return {"id": shader_id, "code": code, "name": entry.get("name")}
 
+@app.get("/api/shaders/{shader_id}/thumbnail")
+async def get_shader_thumbnail(shader_id: str):
+    """Returns the shader thumbnail image if present."""
+    entry = next((s for s in await asset_service.read_index("shader") if s.get("id") == shader_id), None)
+    if not entry or not entry.get("thumbnail"):
+        raise HTTPException(404, "Thumbnail not found")
+
+    thumb_path = f"{STORAGE_MAP['shader']['folder']}{entry['thumbnail']}"
+    blob = bucket.blob(thumb_path)
+    if not await run_io(blob.exists):
+        raise HTTPException(404, "Thumbnail not found")
+
+    def iterfile():
+        with blob.open("rb") as f:
+            while chunk := f.read(1024 * 1024):
+                yield chunk
+
+    return StreamingResponse(iterfile(), media_type="image/png")
+
 @app.put("/api/shaders/{shader_id}")
+@app.post("/api/shaders/{shader_id}/update")
 async def update_shader_metadata(shader_id: str, payload: MetaPatch):
     """Update shader metadata (name, rating, coordinate, etc)."""
-    config = STORAGE_MAP["shader"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index = await run_io(_read_json_sync, index_path)
-            if not isinstance(index, list):
-                raise HTTPException(500, "Index corrupted")
-            
-            entry_idx = next((i for i, s in enumerate(index) if s.get("id") == shader_id), -1)
-            if entry_idx == -1:
-                raise HTTPException(404, "Shader not found")
-            
-            entry = index[entry_idx]
-            updated = {}
-            
-            if payload.name is not None:
-                entry["name"] = payload.name
-                updated["name"] = payload.name
-            if payload.rating is not None:
-                entry["rating"] = payload.rating
-                updated["rating"] = payload.rating
-            if payload.coordinate is not None:
-                entry["coordinate"] = payload.coordinate
-                updated["coordinate"] = payload.coordinate
-            if payload.tags is not None:
-                entry["tags"] = payload.tags
-                updated["tags"] = payload.tags
-            if payload.params is not None:
-                # Convert Pydantic models to dicts
-                entry["params"] = [p.dict() for p in payload.params]
-                updated["params"] = f"{len(payload.params)} parameters"
-            
-            if updated:
-                await run_io(_write_json_sync, index_path, index)
-                await cache.delete(f"shader:{shader_id}")
-                await cache.delete("shaders:list")
-            
-            return {"success": True, "id": shader_id, "updated": updated}
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to update shader {shader_id}: {e}")
-            raise HTTPException(500, f"Update failed: {str(e)}")
+    try:
+        index = await asset_service.read_index("shader")
+        entry_idx = next((i for i, s in enumerate(index) if s.get("id") == shader_id), -1)
+        if entry_idx == -1:
+            raise HTTPException(404, "Shader not found")
+
+        entry = index[entry_idx]
+        updated = {}
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if payload.name is not None:
+            entry["name"] = payload.name
+            updated["name"] = payload.name
+        if payload.rating is not None:
+            entry["rating"] = payload.rating
+            updated["rating"] = payload.rating
+        if payload.coordinate is not None:
+            entry["coordinate"] = payload.coordinate
+            updated["coordinate"] = payload.coordinate
+        if payload.tags is not None:
+            entry["tags"] = payload.tags
+            updated["tags"] = payload.tags
+        if payload.params is not None:
+            entry["params"] = [p.dict() for p in payload.params]
+            updated["params"] = f"{len(payload.params)} parameters"
+        if payload.updated_at is not None:
+            entry["updated_at"] = payload.updated_at
+            updated["updated_at"] = payload.updated_at
+        elif updated:
+            entry["updated_at"] = now
+            updated["updated_at"] = entry["updated_at"]
+
+        if updated:
+            await asset_service.write_index("shader", index)
+            _log_event("update_shader_metadata", shader_id=shader_id, updated=updated)
+
+        return {"success": True, "id": shader_id, "updated": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("update_shader_metadata_failed", level="error", shader_id=shader_id, error=str(e))
+        raise HTTPException(500, f"Update failed: {str(e)}")
 
 # ========================= COORDINATE SYNC =========================
 
 @app.post("/api/admin/sync-coordinates")
 async def sync_shader_coordinates(payload: CoordinateSyncPayload):
     """Sync coordinates from shader_coordinates.json."""
-    config = STORAGE_MAP["shader"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index = await run_io(_read_json_sync, index_path)
-            if not isinstance(index, list):
-                index = []
-            
-            updated = 0
-            skipped = 0
-            
-            for entry in index:
-                shader_id = entry.get("id")
-                if shader_id in payload.coordinates:
-                    existing_coord = entry.get("coordinate")
-                    new_coord = payload.coordinates[shader_id]
-                    
-                    if existing_coord is None or payload.overwrite:
-                        entry["coordinate"] = new_coord
-                        updated += 1
-                    else:
-                        skipped += 1
-            
-            if updated > 0:
-                await run_io(_write_json_sync, index_path, index)
-                await cache.delete("shaders:list")
-            
-            return {
-                "success": True,
-                "updated": updated,
-                "skipped": skipped,
-                "total": len(index)
-            }
-            
-        except Exception as e:
-            logging.error(f"Failed to sync coordinates: {e}")
-            raise HTTPException(500, f"Sync failed: {str(e)}")
+    try:
+        index = await asset_service.read_index("shader")
+        updated = 0
+        skipped = 0
+
+        for entry in index:
+            shader_id = entry.get("id")
+            if shader_id in payload.coordinates:
+                existing_coord = entry.get("coordinate")
+                new_coord = payload.coordinates[shader_id]
+                if existing_coord is None or payload.overwrite:
+                    entry["coordinate"] = new_coord
+                    updated += 1
+                else:
+                    skipped += 1
+
+        if updated > 0:
+            await asset_service.write_index("shader", index)
+            _log_event("sync_shader_coordinates", updated=updated, skipped=skipped)
+
+        return {
+            "success": True,
+            "updated": updated,
+            "skipped": skipped,
+            "total": len(index)
+        }
+    except Exception as e:
+        _log_event("sync_shader_coordinates_failed", level="error", error=str(e))
+        raise HTTPException(500, f"Sync failed: {str(e)}")
 
 # ========================= SONGS / SAMPLES / MUSIC (Original) =========================
 
@@ -1134,39 +1345,57 @@ async def list_library(
     sort_desc: bool = Query(True)
 ):
     cache_key = f"library:{type or 'all'}:{sort_by}:{sort_desc}:{genre}:{min_rating}"
-    cached = await cache.get(cache_key)
+    cached = await cache_get(cache_key)
     if cached:
         return cached
-    
+
     search_types = [type] if type else ["song", "pattern", "bank", "sample", "music", "shader", "image", "video"]
     results = []
-    
+
+    def effective_rating(item):
+        return item.get("rating") if item.get("rating") is not None else item.get("stars", 0)
+
     for t in search_types:
-        config = STORAGE_MAP.get(t, STORAGE_MAP["default"])
         try:
-            items = await run_io(_read_json_sync, config["index"])
+            items = await asset_service.read_index(t)
             if isinstance(items, list):
+                if t == "shader":
+                    for shader in items:
+                        shader.setdefault("stars", 0.0)
+                        shader.setdefault("rating_count", 0)
+                        shader.setdefault("play_count", 0)
+                        shader.setdefault("rating", shader.get("stars", 0.0))
+                        if shader.get("thumbnail"):
+                            shader["thumbnail_url"] = bucket.blob(
+                                f"{STORAGE_MAP['shader']['folder']}{shader['thumbnail']}"
+                            ).public_url
                 results.extend(items)
         except Exception as e:
-            logging.error(f"Error listing {t}: {e}")
-    
+            _log_event("read_index_failed", level="error", type=t, error=str(e))
+
     if genre:
         results = [r for r in results if r.get("genre") == genre]
     if min_rating is not None:
-        results = [r for r in results if (r.get("rating") or 0) >= min_rating]
-    
+        results = [r for r in results if effective_rating(r) >= min_rating]
+
     def sort_key(item):
-        val = item.get(sort_by.value)
-        return (0, val) if val is not None else (1, "")
-    
+        if sort_by is SortBy.rating:
+            val = effective_rating(item)
+        else:
+            val = item.get(sort_by.value)
+        if val is None:
+            return (1, "")
+        return (0, val)
+
     results.sort(key=sort_key, reverse=sort_desc)
-    await cache.set(cache_key, results, ttl=30)
+    await cache_set(cache_key, results, ttl=30)
     return results
 
 @app.post("/api/songs")
 async def upload_item(payload: ItemPayload):
     item_id = str(uuid.uuid4())
     date_str = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     item_type = payload.type if payload.type in STORAGE_MAP else "song"
     config = STORAGE_MAP[item_type]
     filename = f"{item_id}.json"
@@ -1180,25 +1409,20 @@ async def upload_item(payload: ItemPayload):
         "type": item_type,
         "description": payload.description,
         "filename": filename,
-        "rating": payload.rating
+        "rating": payload.rating,
+        "updated_at": now
     }
     
     payload.data["_cloud_meta"] = meta
-    
-    async with INDEX_LOCK:
-        try:
-            await run_io(_write_json_sync, full_path, payload.data)
-            
-            def _update_index():
-                current = _read_json_sync(config["index"])
-                current.insert(0, meta)
-                _write_json_sync(config["index"], current)
-            
-            await run_io(_update_index)
-            await cache.delete(f"{item_type}:list")
-            return {"success": True, "id": item_id}
-        except Exception as e:
-            raise HTTPException(500, f"Upload failed: {str(e)}")
+    try:
+        await run_io(_write_json_sync, full_path, payload.data)
+        current = await asset_service.read_index(item_type)
+        current.insert(0, meta)
+        await asset_service.write_index(item_type, current)
+        _log_event("upload_item", item_type=item_type, item_id=item_id, filename=filename)
+        return {"success": True, "id": item_id}
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {str(e)}")
 
 @app.put("/api/songs/{item_id}")
 async def update_item(item_id: str, payload: ItemPayload):
@@ -1207,7 +1431,8 @@ async def update_item(item_id: str, payload: ItemPayload):
     filename = f"{item_id}.json"
     full_path = f"{config['folder']}{filename}"
     date_str = datetime.now().strftime("%Y-%m-%d")
-    
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
     new_meta = {
         "id": item_id,
         "name": payload.name,
@@ -1216,50 +1441,56 @@ async def update_item(item_id: str, payload: ItemPayload):
         "type": item_type,
         "description": payload.description,
         "filename": filename,
-        "rating": payload.rating
+        "rating": payload.rating,
+        "updated_at": now
     }
-    
+
     payload.data["_cloud_meta"] = new_meta
-    
-    async with INDEX_LOCK:
-        try:
-            await run_io(_write_json_sync, full_path, payload.data)
-            
-            def _update_index_logic():
-                current = _read_json_sync(config["index"])
-                if not isinstance(current, list):
-                    current = []
-                existing_index = next((i for i, item in enumerate(current) if item.get("id") == item_id), -1)
-                if existing_index != -1:
-                    current.pop(existing_index)
-                current.insert(0, new_meta)
-                _write_json_sync(config["index"], current)
-            
-            await run_io(_update_index_logic)
-            await cache.clear()
-            return {"success": True, "id": item_id, "action": "updated"}
-        except Exception as e:
-            raise HTTPException(500, f"Update failed: {str(e)}")
+    try:
+        await run_io(_write_json_sync, full_path, payload.data)
+        current = await asset_service.read_index(item_type)
+        existing_index = next((i for i, item in enumerate(current) if item.get("id") == item_id), -1)
+        if existing_index != -1:
+            current.pop(existing_index)
+        current.insert(0, new_meta)
+        await asset_service.write_index(item_type, current)
+        _log_event("update_item", item_type=item_type, item_id=item_id, filename=filename)
+        return {"success": True, "id": item_id, "action": "updated"}
+    except Exception as e:
+        raise HTTPException(500, f"Update failed: {str(e)}")
 
 @app.get("/api/songs/{item_id}/meta")
 async def get_item_metadata(item_id: str, type: Optional[str] = Query(None)):
     search_types = [type] if type else ["song", "pattern", "bank", "sample", "music", "shader", "image", "video"]
     for t in search_types:
-        config = STORAGE_MAP.get(t)
-        if not config:
+        try:
+            index_data = await asset_service.read_index(t)
+            if isinstance(index_data, list):
+                entry = next((item for item in index_data if item.get("id") == item_id), None)
+                if entry:
+                    return entry
+        except Exception:
             continue
-        index_data = await run_io(_read_json_sync, config["index"])
-        if isinstance(index_data, list):
-            entry = next((item for item in index_data if item.get("id") == item_id), None)
-            if entry:
-                return entry
     raise HTTPException(404, "Item not found")
 
 @app.get("/api/songs/{item_id}")
 async def get_item(item_id: str, type: Optional[str] = Query(None)):
     search_types = [type] if type else ["song", "pattern", "bank", "sample", "music", "shader", "image", "video"]
     for t in search_types:
+        if t == "shader":
+            try:
+                entry = next(
+                    (item for item in await asset_service.read_index("shader") if item.get("id") == item_id),
+                    None
+                )
+                if entry:
+                    return entry
+            except Exception:
+                continue
+
         config = STORAGE_MAP.get(t)
+        if not config:
+            continue
         filepath = f"{config['folder']}{item_id}.json"
         blob = bucket.blob(filepath)
         exists = await run_io(blob.exists)
@@ -1270,38 +1501,33 @@ async def get_item(item_id: str, type: Optional[str] = Query(None)):
 
 @app.patch("/api/songs/{item_id}")
 async def patch_song(item_id: str, patch: MetaPatch):
-    config = STORAGE_MAP["song"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index = await run_io(_read_json_sync, index_path)
-            if not isinstance(index, list):
-                index = []
-            
-            entry = next((e for e in index if e.get("id") == item_id), None)
-            if not entry:
-                raise HTTPException(status_code=404, detail="Song not found")
-            
-            changes = patch.model_dump(exclude_unset=True)
-            if not changes:
-                return {"status": "no-op", "message": "Nothing to update"}
-            
-            updated = {}
-            for field, value in changes.items():
-                if field == "tags":
-                    entry["tags"] = value if value is not None else []
-                else:
-                    entry[field] = value
-                updated[field] = entry[field]
-            
-            await run_io(_write_json_sync, index_path, index)
-            await cache.clear()
-            
-            return {"status": "success", "item_id": item_id, "updated": updated}
-        except Exception as e:
-            logging.error(f"PATCH /songs/{item_id} failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+    try:
+        index = await asset_service.read_index("song")
+        entry = next((e for e in index if e.get("id") == item_id), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Song not found")
+
+        changes = patch.model_dump(exclude_unset=True)
+        if not changes:
+            return {"status": "no-op", "message": "Nothing to update"}
+
+        updated = {}
+        for field, value in changes.items():
+            if field == "tags":
+                entry["tags"] = value if value is not None else []
+            else:
+                entry[field] = value
+            updated[field] = entry[field]
+        if "updated_at" not in changes:
+            entry["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            updated["updated_at"] = entry["updated_at"]
+
+        await asset_service.write_index("song", index)
+        _log_event("patch_song", item_id=item_id, updated=updated)
+        return {"status": "success", "item_id": item_id, "updated": updated}
+    except Exception as e:
+        _log_event("patch_song_failed", level="error", item_id=item_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ========================= SAMPLES =========================
 
@@ -1318,6 +1544,7 @@ async def upload_sample(
     config = STORAGE_MAP["sample"]
     full_path = f"{config['folder']}{storage_filename}"
     
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     meta = {
         "id": sample_id,
         "name": file.filename,
@@ -1326,29 +1553,26 @@ async def upload_sample(
         "type": "sample",
         "description": description,
         "filename": storage_filename,
-        "rating": rating
+        "rating": rating,
+        "updated_at": now
     }
     
-    async with INDEX_LOCK:
-        try:
-            blob = bucket.blob(full_path)
-            await run_io(blob.upload_from_file, file.file, content_type=file.content_type)
-            
-            def _update_idx():
-                idx = _read_json_sync(config["index"])
-                idx.insert(0, meta)
-                _write_json_sync(config["index"], idx)
-            
-            await run_io(_update_idx)
-            await cache.delete("library:sample")
-            return {"success": True, "id": sample_id}
-        except Exception as e:
-            raise HTTPException(500, str(e))
+    try:
+        blob = bucket.blob(full_path)
+        await run_io(blob.upload_from_file, file.file, content_type=file.content_type)
+
+        idx = await asset_service.read_index("sample")
+        idx.insert(0, meta)
+        await asset_service.write_index("sample", idx)
+        _log_event("upload_sample", sample_id=sample_id, filename=storage_filename)
+        return {"success": True, "id": sample_id}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 @app.get("/api/samples/{sample_id}")
 async def get_sample(sample_id: str):
     config = STORAGE_MAP["sample"]
-    idx = await run_io(_read_json_sync, config["index"])
+    idx = await asset_service.read_index("sample")
     entry = next((i for i in idx if i["id"] == sample_id), None)
     if not entry:
         raise HTTPException(404, "Sample not found")
@@ -1387,68 +1611,61 @@ async def record_play(sample_id: str):
             
             entry["last_played"] = now
             await run_io(_write_json_sync, index_path, index_data)
-            await cache.delete("library:sample")
-            await cache.delete("library:all")
+            await cache_delete("library:sample")
+            await cache_delete("library:all")
             
             return {"success": True, "id": sample_id, "last_played": now}
         except HTTPException:
             raise
         except Exception as e:
-            logging.error(f"Failed to record play: {e}")
+            _log_event("record_sample_play_failed", level="error", sample_id=sample_id, error=str(e))
             raise HTTPException(500, f"Failed: {str(e)}")
 
 @app.put("/api/samples/{sample_id}")
 async def update_sample_metadata(sample_id: str, payload: SampleMetaUpdatePayload):
-    config = STORAGE_MAP["sample"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, index_path)
-            if not isinstance(index_data, list):
-                raise HTTPException(500, "Index corrupted")
-            
-            entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == sample_id), -1)
-            if entry_idx == -1:
-                raise HTTPException(404, "Sample not found")
-            
-            entry = index_data[entry_idx]
-            update_happened = False
-            
-            if payload.name is not None and payload.name != entry.get("name"):
-                entry["name"] = payload.name
-                update_happened = True
-            if payload.description is not None:
-                entry["description"] = payload.description
-                update_happened = True
-            if payload.rating is not None:
-                entry["rating"] = payload.rating
-                update_happened = True
-            if payload.genre is not None:
-                entry["genre"] = payload.genre
-                update_happened = True
-            if payload.last_played is not None:
-                entry["last_played"] = payload.last_played
-                update_happened = True
-            
-            if update_happened:
-                await run_io(_write_json_sync, index_path, index_data)
-                await cache.delete("library:sample")
-                await cache.delete("library:all")
-            
-            return {"success": True, "id": sample_id, "action": "metadata_updated" if update_happened else "no_change"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to update sample: {e}")
-            raise HTTPException(500, f"Failed: {str(e)}")
+    try:
+        index_data = await asset_service.read_index("sample")
+        entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == sample_id), -1)
+        if entry_idx == -1:
+            raise HTTPException(404, "Sample not found")
+
+        entry = index_data[entry_idx]
+        update_happened = False
+
+        if payload.name is not None and payload.name != entry.get("name"):
+            entry["name"] = payload.name
+            update_happened = True
+        if payload.description is not None:
+            entry["description"] = payload.description
+            update_happened = True
+        if payload.rating is not None:
+            entry["rating"] = payload.rating
+            update_happened = True
+        if payload.genre is not None:
+            entry["genre"] = payload.genre
+            update_happened = True
+        if payload.last_played is not None:
+            entry["last_played"] = payload.last_played
+            update_happened = True
+
+        if update_happened:
+            entry["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            await asset_service.write_index("sample", index_data)
+            _log_event("update_sample_metadata", sample_id=sample_id, action="metadata_updated")
+
+        return {"success": True, "id": sample_id, "action": "metadata_updated" if update_happened else "no_change"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("update_sample_metadata_failed", level="error", sample_id=sample_id, error=str(e))
+        raise HTTPException(500, f"Failed: {str(e)}")
 
 # ========================= MUSIC =========================
 
 @app.get("/api/music/{music_id}")
 async def get_music_file(music_id: str):
     config = STORAGE_MAP["music"]
-    idx = await run_io(_read_json_sync, config["index"])
+    idx = await asset_service.read_index("music")
     entry = next((i for i in idx if i["id"] == music_id), None)
     if not entry:
         raise HTTPException(404, "Music not found")
@@ -1481,46 +1698,39 @@ async def get_music_file(music_id: str):
 
 @app.put("/api/music/{music_id}")
 async def update_music_metadata(music_id: str, payload: SampleMetaUpdatePayload):
-    config = STORAGE_MAP["music"]
-    index_path = config["index"]
-    
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, index_path)
-            if not isinstance(index_data, list):
-                raise HTTPException(500, "Index corrupted")
-            
-            entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == music_id), -1)
-            if entry_idx == -1:
-                raise HTTPException(404, "Music not found")
-            
-            entry = index_data[entry_idx]
-            update_happened = False
-            
-            if payload.name is not None:
-                entry["name"] = payload.name
-                update_happened = True
-            if payload.rating is not None:
-                entry["rating"] = payload.rating
-                update_happened = True
-            if payload.genre is not None:
-                entry["genre"] = payload.genre
-                update_happened = True
-            if payload.description is not None:
-                entry["description"] = payload.description
-                update_happened = True
-            
-            if update_happened:
-                await run_io(_write_json_sync, index_path, index_data)
-                await cache.delete("library:music")
-                await cache.delete("library:all")
-            
-            return {"success": True, "id": music_id, "action": "updated" if update_happened else "no_change"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to update music metadata: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to update: {str(e)}")
+    try:
+        index_data = await asset_service.read_index("music")
+        entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == music_id), -1)
+        if entry_idx == -1:
+            raise HTTPException(404, "Music not found")
+
+        entry = index_data[entry_idx]
+        update_happened = False
+
+        if payload.name is not None:
+            entry["name"] = payload.name
+            update_happened = True
+        if payload.rating is not None:
+            entry["rating"] = payload.rating
+            update_happened = True
+        if payload.genre is not None:
+            entry["genre"] = payload.genre
+            update_happened = True
+        if payload.description is not None:
+            entry["description"] = payload.description
+            update_happened = True
+
+        if update_happened:
+            entry["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            await asset_service.write_index("music", index_data)
+            _log_event("update_music_metadata", music_id=music_id, action="updated")
+
+        return {"success": True, "id": music_id, "action": "updated" if update_happened else "no_change"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("update_music_metadata_failed", level="error", music_id=music_id, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to update: {str(e)}")
 
 
 # ========================= IMAGES =========================
@@ -1566,40 +1776,38 @@ async def update_image_metadata(image_id: str, payload: SampleMetaUpdatePayload)
     config = STORAGE_MAP["image"]
     index_path = config["index"]
 
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, index_path)
-            if not isinstance(index_data, list):
-                raise HTTPException(500, "Index corrupted")
+    try:
+        index_data = await run_io(_read_json_sync, index_path)
+        if not isinstance(index_data, list):
+            raise HTTPException(500, "Index corrupted")
 
-            entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == image_id), -1)
-            if entry_idx == -1:
-                raise HTTPException(404, "Image not found")
+        entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == image_id), -1)
+        if entry_idx == -1:
+            raise HTTPException(404, "Image not found")
 
-            entry = index_data[entry_idx]
-            update_happened = False
+        entry = index_data[entry_idx]
+        update_happened = False
 
-            if payload.name is not None:
-                entry["name"] = payload.name
-                update_happened = True
-            if payload.rating is not None:
-                entry["rating"] = payload.rating
-                update_happened = True
-            if payload.description is not None:
-                entry["description"] = payload.description
-                update_happened = True
+        if payload.name is not None:
+            entry["name"] = payload.name
+            update_happened = True
+        if payload.rating is not None:
+            entry["rating"] = payload.rating
+            update_happened = True
+        if payload.description is not None:
+            entry["description"] = payload.description
+            update_happened = True
 
-            if update_happened:
-                await run_io(_write_json_sync, index_path, index_data)
-                await cache.delete("library:image")
-                await cache.delete("library:all")
+        if update_happened:
+            entry["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            await asset_service.write_index("image", index_data)
 
-            return {"success": True, "id": image_id, "action": "updated" if update_happened else "no_change"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to update image: {e}")
-            raise HTTPException(500, f"Failed: {str(e)}")
+        return {"success": True, "id": image_id, "action": "updated" if update_happened else "no_change"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("update_image_failed", level="error", image_id=image_id, error=str(e))
+        raise HTTPException(500, f"Failed: {str(e)}")
 
 # ========================= VIDEOS =========================
 
@@ -1642,40 +1850,38 @@ async def update_video_metadata(video_id: str, payload: SampleMetaUpdatePayload)
     config = STORAGE_MAP["video"]
     index_path = config["index"]
 
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, index_path)
-            if not isinstance(index_data, list):
-                raise HTTPException(500, "Index corrupted")
+    try:
+        index_data = await run_io(_read_json_sync, index_path)
+        if not isinstance(index_data, list):
+            raise HTTPException(500, "Index corrupted")
 
-            entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == video_id), -1)
-            if entry_idx == -1:
-                raise HTTPException(404, "Video not found")
+        entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == video_id), -1)
+        if entry_idx == -1:
+            raise HTTPException(404, "Video not found")
 
-            entry = index_data[entry_idx]
-            update_happened = False
+        entry = index_data[entry_idx]
+        update_happened = False
 
-            if payload.name is not None:
-                entry["name"] = payload.name
-                update_happened = True
-            if payload.rating is not None:
-                entry["rating"] = payload.rating
-                update_happened = True
-            if payload.description is not None:
-                entry["description"] = payload.description
-                update_happened = True
+        if payload.name is not None:
+            entry["name"] = payload.name
+            update_happened = True
+        if payload.rating is not None:
+            entry["rating"] = payload.rating
+            update_happened = True
+        if payload.description is not None:
+            entry["description"] = payload.description
+            update_happened = True
 
-            if update_happened:
-                await run_io(_write_json_sync, index_path, index_data)
-                await cache.delete("library:video")
-                await cache.delete("library:all")
+        if update_happened:
+            entry["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            await asset_service.write_index("video", index_data)
 
-            return {"success": True, "id": video_id, "action": "updated" if update_happened else "no_change"}
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Failed to update video: {e}")
-            raise HTTPException(500, f"Failed: {str(e)}")
+        return {"success": True, "id": video_id, "action": "updated" if update_happened else "no_change"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("update_video_failed", level="error", video_id=video_id, error=str(e))
+        raise HTTPException(500, f"Failed: {str(e)}")
 
 # ========================= ADMIN / SYNC =========================
 
@@ -1731,8 +1937,8 @@ async def sync_images_folder():
 
             if report["added"] > 0 or report["removed"] > 0:
                 await run_io(_write_json_sync, config["index"], new_index)
-                await cache.delete("library:image")
-                await cache.delete("library:all")
+                await cache_delete("library:image")
+                await cache_delete("library:all")
 
             report["total"] = len(new_index)
             return report
@@ -1789,8 +1995,8 @@ async def sync_videos_folder():
 
             if report["added"] > 0 or report["removed"] > 0:
                 await run_io(_write_json_sync, config["index"], new_index)
-                await cache.delete("library:video")
-                await cache.delete("library:all")
+                await cache_delete("library:video")
+                await cache_delete("library:all")
 
             report["total"] = len(new_index)
             return report
@@ -1798,37 +2004,93 @@ async def sync_videos_folder():
             raise HTTPException(500, f"Failed to sync videos: {str(e)}")
 
 @app.post("/api/admin/sync")
+async def sync_gcs_storage(type: Optional[str] = Query(None, alias="type")):
+    """Sync one or more GCS asset folders back into index files.
 
-async def sync_gcs_storage():
+    When no ?type= parameter is provided, all asset types except default and
+    music are synchronized. Passing ?type=shader or ?type=music will target a
+    single type explicitly.
+    """
+    requested_types = [t.strip() for t in type.split(",")] if type else []
+    if requested_types:
+        invalid = [t for t in requested_types if t not in STORAGE_MAP or t == "default"]
+        if invalid:
+            raise HTTPException(400, f"Unsupported sync type(s): {', '.join(invalid)}")
+        sync_types = requested_types
+    else:
+        sync_types = [t for t in STORAGE_MAP if t != "default" and t != "music"]
+
     report = {}
-    async with INDEX_LOCK:
-        for item_type, config in STORAGE_MAP.items():
-            if item_type == "default" or item_type == "music":
-                continue
-            
-            added = 0
-            removed = 0
-            
-            try:
-                blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
-                actual_files = []
-                for b in blobs:
-                    fname = b.name.replace(config["folder"], "")
-                    if fname and not b.name.endswith(config["index"]):
+
+    for item_type in sync_types:
+        config = STORAGE_MAP[item_type]
+        added = 0
+        removed = 0
+
+        try:
+            blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
+            actual_files = []
+
+            for b in blobs:
+                fname = b.name.replace(config["folder"], "")
+                if not fname or b.name.endswith(config["index"]):
+                    continue
+                if item_type == "shader":
+                    if "/" in fname:
+                        continue
+                    if fname.lower().endswith(".wgsl"):
                         actual_files.append(fname)
-                
-                index_data = await run_io(_read_json_sync, config["index"])
-                if not isinstance(index_data, list):
-                    index_data = []
-                
-                index_map = {item["filename"]: item for item in index_data}
-                disk_set = set(actual_files)
-                
-                new_index = [item for item in index_data if item["filename"] in disk_set]
-                removed = len(index_data) - len(new_index)
-                
-                for filename in actual_files:
-                    if filename not in index_map:
+                else:
+                    actual_files.append(fname)
+
+            index_data = await asset_service.read_index(item_type)
+            if not isinstance(index_data, list):
+                index_data = []
+
+            index_map = {item["filename"]: item for item in index_data}
+            disk_set = set(actual_files)
+
+            new_index = [item for item in index_data if item["filename"] in disk_set]
+            removed = len(index_data) - len(new_index)
+            for item in new_index:
+                if "updated_at" not in item:
+                    item["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            for filename in actual_files:
+                if filename not in index_map:
+                    if item_type == "shader":
+                        shader_id = filename.replace(".wgsl", "")
+                        new_entry = {
+                            "id": shader_id,
+                            "filename": filename,
+                            "type": "shader",
+                            "date": datetime.now().strftime("%Y-%m-%d"),
+                            "name": shader_id.replace("-", " ").title(),
+                            "author": "Unknown",
+                            "description": "Auto-discovered",
+                            "genre": None,
+                            "last_played": None,
+                            "stars": 0.0,
+                            "rating_count": 0,
+                            "play_count": 0,
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "thumbnail": None
+                        }
+                        meta_blob = bucket.blob(f"{config['folder']}{shader_id}/metadata.json")
+                        if await run_io(meta_blob.exists):
+                            try:
+                                meta_content = json.loads(await run_io(meta_blob.download_as_text))
+                                new_entry.update({
+                                    k: v for k, v in meta_content.items()
+                                    if k in {
+                                        "name", "author", "description", "tags",
+                                        "coordinate", "stars", "rating_count",
+                                        "play_count", "thumbnail", "updated_at"
+                                    }
+                                })
+                            except Exception:
+                                pass
+                    else:
                         new_entry = {
                             "id": str(uuid.uuid4()),
                             "filename": filename,
@@ -1838,32 +2100,34 @@ async def sync_gcs_storage():
                             "author": "Unknown",
                             "description": "Auto-discovered",
                             "genre": None,
-                            "last_played": None
+                            "last_played": None,
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
                         }
-                        
+
                         if filename.endswith(".json") and item_type in ["song", "pattern", "bank"]:
                             try:
                                 b = bucket.blob(f"{config['folder']}{filename}")
-                                content = json.loads(b.download_as_text())
+                                content = json.loads(await run_io(b.download_as_text))
                                 if "name" in content:
                                     new_entry["name"] = content["name"]
                                 if "author" in content:
                                     new_entry["author"] = content["author"]
-                            except:
+                            except Exception:
                                 pass
-                        
-                        new_index.insert(0, new_entry)
-                        added += 1
-                
-                if added > 0 or removed > 0:
-                    await run_io(_write_json_sync, config["index"], new_index)
-                
-                report[item_type] = {"added": added, "removed": removed, "status": "synced"}
-            except Exception as e:
-                report[item_type] = {"error": str(e)}
-        
-        await cache.clear()
-        return report
+
+                    new_index.insert(0, new_entry)
+                    added += 1
+
+            if added > 0 or removed > 0:
+                await asset_service.write_index(item_type, new_index)
+
+            report[item_type] = {"added": added, "removed": removed, "status": "synced"}
+        except Exception as e:
+            report[item_type] = {"error": str(e)}
+
+    await cache_clear()
+    _log_event("sync_gcs_storage", report=report)
+    return report
 
 @app.post("/api/admin/seed-test-samples")
 async def seed_test_samples():
@@ -1891,8 +2155,8 @@ async def seed_test_samples():
                     added += 1
             
             await run_io(_write_json_sync, config["index"], index_data)
-            await cache.delete("library:sample")
-            await cache.delete("library:all")
+            await cache_delete("library:sample")
+            await cache_delete("library:all")
             return {"success": True, "added": added, "total": len(index_data)}
         except Exception as e:
             raise HTTPException(500, f"Failed to seed: {str(e)}")
@@ -1921,8 +2185,8 @@ async def seed_brainfuck_examples():
                 idx.insert(0, ex)
                 added += 1
         await run_io(_write_json_sync, config["index"], idx)
-        await cache.delete("library:brainfuck")
-        await cache.delete("library:all")
+        await cache_delete("library:brainfuck")
+        await cache_delete("library:all")
         return {"success": True, "added": added, "total": len(idx)}
 
 # ========================= STORAGE LISTING =========================
@@ -1959,57 +2223,6 @@ async def list_categories():
         "groups": CATEGORY_GROUPS,
         "all_categories": [c.value for c in ShaderCategory]
     }
-@app.post("/api/shaders/upload")
-async def upload_shader(
-    file: UploadFile = File(...),  # The .wgsl file
-    name: str = Form(...),
-    description: str = Form(""),
-    tags: str = Form(""),  # Comma-separated
-    author: str = Form("ford442")
-):
-    if not file.filename.endswith(".wgsl"):
-        raise HTTPException(400, "Only .wgsl files allowed")
-    
-    shader_id = str(uuid.uuid4())
-    storage_filename = f"{shader_id}.wgsl"
-    config = STORAGE_MAP["shader"]
-    full_path = f"{config['folder']}{storage_filename}"
-    
-    meta = {
-        "id": shader_id,
-        "name": name,
-        "author": author,
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "description": description,
-        "tags": [t.strip() for t in tags.split(",")] if tags else [],
-        "filename": storage_filename,
-        "stars": 0.0,
-        "rating_count": 0
-    }
-    
-    try:
-        # 1. Upload the .wgsl file (outside lock to minimize contention)
-        blob = bucket.blob(full_path)
-        await run_io(blob.upload_from_file, file.file, content_type="text/plain")
-        
-        # 2. Save metadata.json to GCS (separate from index, no lock needed)
-        meta_path = f"{config['folder']}{shader_id}/metadata.json"
-        meta_blob = bucket.blob(meta_path)
-        await run_io(meta_blob.upload_from_string, json.dumps(meta), content_type="application/json")
-        
-        # 3. Update index (inside lock)
-        async with INDEX_LOCK:
-            index = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index, list):
-                index = []
-            index.insert(0, meta)
-            await run_io(_write_json_sync, config["index"], index)
-            await cache.delete("shaders:list")
-        
-        return {"success": True, "id": shader_id, "meta": meta}
-    except Exception as e:
-        raise HTTPException(500, f"Shader upload failed: {str(e)}")
-   
 # ========================= FTP BRIDGE ENDPOINTS =========================
 
 @app.head("/api/shaders/{shader_id}/wgsl")
@@ -2018,7 +2231,7 @@ async def get_shader_wgsl(shader_id: str):
     """Returns raw WGSL text for direct consumption by WebGPU renderer.
     Resolution order: memory cache → GCS bucket → FTP server."""
     cache_key = f"shader_wgsl:{shader_id}"
-    cached = await cache.get(cache_key)
+    cached = await cache_get(cache_key)
     if cached:
         return PlainTextResponse(cached, media_type="text/plain")
 
@@ -2028,14 +2241,14 @@ async def get_shader_wgsl(shader_id: str):
     blob = bucket.blob(blob_path)
     if await run_io(blob.exists):
         code = await run_io(blob.download_as_text)
-        await cache.set(cache_key, code, ttl=3600)
+        await cache_set(cache_key, code, ttl=3600)
         return PlainTextResponse(code, media_type="text/plain")
 
     # Fallback to FTP
     if FTP_ENABLED:
         try:
             code = await run_io(_fetch_ftp_file_sync, f"{shader_id}.wgsl")
-            await cache.set(cache_key, code, ttl=3600)
+            await cache_set(cache_key, code, ttl=3600)
             return PlainTextResponse(code, media_type="text/plain")
         except Exception:
             pass
@@ -2050,16 +2263,15 @@ async def get_ftp_shader(filename: str):
     if not filename.endswith(".wgsl"):
         filename += ".wgsl"
     cache_key = f"ftp_shader_code:{filename}"
-    cached = await cache.get(cache_key)
+    cached = await cache_get(cache_key)
     if cached:
         return {"source": "cache", "filename": filename, "code": cached}
     try:
         code = await run_io(_fetch_ftp_file_sync, filename)
-        await cache.set(cache_key, code, ttl=3600)
+        await cache_set(cache_key, code, ttl=3600)
         return {"source": "ftp", "filename": filename, "code": code}
     except Exception as e:
-        logging.error(f"FTP fetch failed for {filename}: {e}")
-        raise HTTPException(404, f"FTP fetch failed: {str(e)}")
+            _log_event("ftp_fetch_failed", level="error", filename=filename, error=str(e))
 
 @app.post("/api/admin/sync-ftp-to-gcs")
 async def sync_ftp_to_gcs():
@@ -2101,12 +2313,12 @@ async def sync_ftp_to_gcs():
                     })
                     report["added"] += 1
                 except Exception as e:
-                    logging.error(f"Failed to import {fname} from FTP: {e}")
+                    _log_event("ftp_import_failed", level="error", filename=fname, error=str(e))
                     report["errors"].append({"file": fname, "error": str(e)})
 
             if report["added"] > 0:
                 await run_io(_write_json_sync, config["index"], index)
-            await cache.clear()
+            await cache_clear()
         except Exception as e:
             raise HTTPException(500, f"FTP sync failed: {str(e)}")
 

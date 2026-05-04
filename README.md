@@ -60,7 +60,43 @@ All services write to /home/ftpbridge/files  ←── single FTP account, vsftp
   1. The **`/admin`** dashboard (drag-and-drop universal uploader)
   2. **Google Cloud Storage** bucket sync (drop files in the bucket and the VPS file watcher auto-indexes them)
 - Audio tracks dropped into `audio/music/` are automatically scanned and added to `songs.json` if missing.
+- Shader assets are now included in the main `/api/songs` library endpoint and can be synchronized via the storage manager.
+- `/api/admin/sync` supports `?type=shader` and now backfills missing `updated_at` values for indexed assets.
+- `/api/admin/sync-music` supports optional `?type=music` and keeps music metadata up to date.
 - Markdown notes dropped into `notes/` are immediately available via the `/api/notes/` REST endpoints.
+
+### AssetService architecture
+
+```mermaid
+flowchart LR
+  Client["Client / Webhook"] --> FastAPI["FastAPI / Python Bridge"]
+  FastAPI --> AssetService["AssetService"]
+  AssetService --> Cache["Memory cache"]
+  AssetService --> GCS["Google Cloud Storage"]
+  AssetService --> Index["JSON index file"]
+  Cache --> Index
+```
+
+### API endpoint examples
+
+- `GET /api/songs` — returns combined library items, including `type=shader` entries.
+- `GET /api/shaders` — list shaders with `stars`, `play_count`, `rating_count`, and `thumbnail_url`.
+- `GET /api/shaders/{shader_id}` — retrieve one shader metadata entry.
+- `POST /api/shaders/{shader_id}/rate` — form field `stars=4` updates average rating.
+- `POST /api/shaders/{shader_id}/play` — increments shader play count.
+- `POST /api/shaders/upload` — upload `.wgsl` shader code and optional `.png` thumbnail.
+- `PUT /api/shaders/{shader_id}` or `POST /api/shaders/{shader_id}/update` — patch shader metadata.
+- `POST /api/admin/sync?type=shader` — rebuild the shader index from `shaders/*.wgsl`.
+- `POST /api/admin/sync-music?type=music` — refresh the `music` index from Cloud Storage.
+
+### Shader index migration
+
+- Shader metadata is now centralized in `shaders/_shaders.json` and surfaced through `/api/songs`.
+- The sync flow auto-discovers missing `.wgsl` shader assets and creates index entries for them.
+- Shader IDs are derived from the filename (for example, `shaders/example.wgsl` becomes `example`).
+- If a shader entry lacks `updated_at`, it will be backfilled during sync.
+- To apply the migration after updating bucket contents, run:
+  `curl -X POST "http://localhost:8000/api/admin/sync?type=shader"`
 
 ---
 
@@ -151,6 +187,27 @@ docker compose --profile full up -d
 # 6. Verify
 curl http://localhost:8000/health   # Python bridge
 curl http://localhost:3000/health   # Node bridge
+
+## Running tests
+
+Install Python dependencies and test tools:
+
+```bash
+python3 -m pip install -r packages/python-bridge/requirements.txt
+python3 -m pip install pytest pytest-asyncio
+```
+
+Run the test suite:
+
+```bash
+python3 -m pytest
+```
+
+Run a single test:
+
+```bash
+python3 -m pytest tests/test_cors.py
+```
 ```
 
 ---
@@ -554,6 +611,8 @@ Set `STATIC_BASE_URL` in `.env` to the public HTTPS URL your apps should use.
 ---
 
 ## Extending the Bridge
+
+This bridge now centralizes metadata index operations through a shared service layer in `packages/python-bridge/app/api_full.py`. Asset indexes also include an `updated_at` timestamp on shaders, songs, samples, music, images, and videos to make metadata change tracking and sorting more reliable.
 
 ### Add a new webhook source (Python)
 
