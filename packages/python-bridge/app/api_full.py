@@ -161,15 +161,14 @@ async def lifespan(app: FastAPI):
         print(f"--- GCS CONNECTED: {BUCKET_NAME} ---")
 
         # Seed shaders if index is empty
-        shader_config = STORAGE_MAP["shader"]
         try:
-            shader_index = await run_io(_read_json_sync, shader_config["index"])
-            if not isinstance(shader_index, list) or len(shader_index) == 0:
+            shader_index = await asset_service.read_index("shader")
+            if not shader_index:
                 seed_file = Path(__file__).parent / "seed_shaders.json"
                 if seed_file.exists():
                     with open(seed_file) as f:
                         seed_data = json.load(f)
-                    await run_io(_write_json_sync, shader_config["index"], seed_data)
+                    await asset_service.write_index("shader", seed_data)
                     print(f"--- SEEDED {len(seed_data)} SHADERS ---")
         except Exception as e:
             print(f"!!! SHADER SEEDING FAILED: {e}")
@@ -408,11 +407,10 @@ class AssetService:
         await self.cache.clear()
 
 asset_service = AssetService()
-# --- ENDPOINTS ---
-@app.get("/")
-def home():
-    return {"status": "online", "provider": "Google Cloud Storage"}
-# --- 0.5 HEALTH CHECK & TEST DATA ---
+
+
+# ========================= ADMIN SYNC =========================
+
 @app.post("/api/admin/sync-music")
 async def sync_music_folder(type: Optional[str] = Query(None, alias="type")):
     """Scans the music/ folder and rebuilds the music index.
@@ -486,83 +484,10 @@ async def sync_music_folder(type: Optional[str] = Query(None, alias="type")):
         return report
     except Exception as e:
         raise HTTPException(500, f"Failed to sync music: {str(e)}")
-@app.post("/api/admin/seed-test-samples")
-async def seed_test_samples():
-    """Creates test sample entries for development."""
-    config = STORAGE_MAP["sample"]
-    test_samples = [
-        {
-            "id": "test-flac-001",
-            "name": "Test Ambient Track.flac",
-            "filename": "test-flac-001.flac",
-            "type": "sample",
-            "author": "Test Artist",
-            "date": "2024-02-09",
-            "description": "Test ambient track",
-            "rating": 8,
-            "genre": "ambient"
-        },
-        {
-            "id": "test-wav-002",
-            "name": "Test Bass Line.wav",
-            "filename": "test-wav-002.wav",
-            "type": "sample",
-            "author": "Test Artist",
-            "date": "2024-02-09",
-            "description": "Test bass line",
-            "rating": 7,
-            "genre": "bass"
-        },
-        {
-            "id": "test-flac-003",
-            "name": "Unrated Demo.flac",
-            "filename": "test-flac-003.flac",
-            "type": "sample",
-            "author": "Unknown",
-            "date": "2024-02-09",
-            "description": "Demo without rating",
-            "rating": None,
-            "genre": None
-        }
-    ]
 
-    async with INDEX_LOCK:
-        try:
-            # Read existing
-            index_data = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index_data, list):
-                index_data = []
 
-            # Add test samples (avoid duplicates)
-            existing_ids = {item.get("id") for item in index_data}
-            added = 0
-            for sample in test_samples:
-                if sample["id"] not in existing_ids:
-                    index_data.insert(0, sample)
-                    added += 1
+# ========================= MODELS =========================
 
-            await run_io(_write_json_sync, config["index"], index_data)
-            await cache_delete("library:sample")
-            await cache_delete("library:all")
-
-            return {"success": True, "added": added, "total": len(index_data)}
-        except Exception as e:
-            raise HTTPException(500, f"Failed to seed: {str(e)}")
-@app.get("/api/health")
-async def health_check():
-    """Returns storage manager status and index counts."""
-    status = {}
-    for item_type, config in STORAGE_MAP.items():
-        if item_type == "default":
-            continue
-        try:
-            items = await run_io(_read_json_sync, config["index"])
-            count = len(items) if isinstance(items, list) else 0
-            status[item_type] = {"count": count, "status": "ok"}
-        except Exception as e:
-            status[item_type] = {"count": 0, "status": "error", "error": str(e)}
-    return {"status": "online", "storage": status}
-# --- 1. LISTING (Cached) ---
 class SortBy(str, Enum):
     date = "date"
     updated_at = "updated_at"
@@ -570,7 +495,7 @@ class SortBy(str, Enum):
     name = "name"
     last_played = "last_played"
     genre = "genre"
-    coordinate = "coordinate"  # NEW
+    coordinate = "coordinate"
 
 class ShaderCategory(str, Enum):
     generative = "generative"
@@ -579,6 +504,11 @@ class ShaderCategory(str, Enum):
     filter = "filter"
     distortion = "distortion"
 
+CATEGORY_GROUPS = {
+    "procedural": ["generative", "reactive"],
+    "effects": ["filter", "distortion"],
+    "animation": ["transition"],
+}
 class SampleMetaUpdatePayload(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -601,30 +531,20 @@ class MetaPatch(BaseModel):
     genre: Optional[str] = None
     tags: Optional[List[str]] = None
     last_played: Optional[str] = None
-    coordinate: Optional[int] = None  # NEW
-    params: Optional[List[ShaderParam]] = None  # Shader parameter definitions
+    coordinate: Optional[int] = None
+    params: Optional[List[ShaderParam]] = None
     updated_at: Optional[str] = None
 
 class CoordinateSyncPayload(BaseModel):
     coordinates: dict
     overwrite: bool = False
 
-ShaderMeta.update_forward_refs()
-ShaderUploadPayload.update_forward_refs()
-ShaderListResponse.update_forward_refs()
-
-# ========================= GCS I/O HELPERS =========================
-def _read_json_sync(blob_path):
-    blob = bucket.blob(blob_path)
-    if blob.exists():
-        return json.loads(blob.download_as_text())
-    return []
-
-def _write_json_sync(blob_path, data):
-    blob = bucket.blob(blob_path)
-    blob.upload_from_string(json.dumps(data), content_type='application/json')
+ShaderMeta.model_rebuild()
+ShaderUploadPayload.model_rebuild()
+ShaderListResponse.model_rebuild()
 
 # ========================= ENDPOINTS =========================
+
 @app.get("/")
 def home():
     return {
@@ -643,12 +563,15 @@ def home():
 
 @app.get("/api/health")
 async def health_check():
+    """Returns storage manager connection status and per-type index counts."""
     status_report = {}
-    for item_type, config in STORAGE_MAP.items():
+    for item_type in STORAGE_MAP:
+        if item_type == "default":
+            continue
         try:
-            index_data = await run_io(_read_json_sync, config["index"])
+            index_data = await asset_service.read_index(item_type)
             status_report[item_type] = {
-                "count": len(index_data) if isinstance(index_data, list) else 0,
+                "count": len(index_data),
                 "status": "connected"
             }
         except Exception as e:
@@ -1595,31 +1518,21 @@ async def get_sample(sample_id: str):
 
 @app.post("/api/samples/{sample_id}/play")
 async def record_play(sample_id: str):
-    config = STORAGE_MAP["sample"]
-    index_path = config["index"]
     now = datetime.now().isoformat()
-    
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, index_path)
-            if not isinstance(index_data, list):
-                raise HTTPException(500, "Index corrupted")
-            
-            entry = next((item for item in index_data if item.get("id") == sample_id), None)
-            if not entry:
-                raise HTTPException(404, "Sample not found")
-            
-            entry["last_played"] = now
-            await run_io(_write_json_sync, index_path, index_data)
-            await cache_delete("library:sample")
-            await cache_delete("library:all")
-            
-            return {"success": True, "id": sample_id, "last_played": now}
-        except HTTPException:
-            raise
-        except Exception as e:
-            _log_event("record_sample_play_failed", level="error", sample_id=sample_id, error=str(e))
-            raise HTTPException(500, f"Failed: {str(e)}")
+    try:
+        index_data = await asset_service.read_index("sample")
+        entry = next((item for item in index_data if item.get("id") == sample_id), None)
+        if not entry:
+            raise HTTPException(404, "Sample not found")
+
+        entry["last_played"] = now
+        await asset_service.write_index("sample", index_data)
+        return {"success": True, "id": sample_id, "last_played": now}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_event("record_sample_play_failed", level="error", sample_id=sample_id, error=str(e))
+        raise HTTPException(500, f"Failed: {str(e)}")
 
 @app.put("/api/samples/{sample_id}")
 async def update_sample_metadata(sample_id: str, payload: SampleMetaUpdatePayload):
@@ -1738,7 +1651,7 @@ async def update_music_metadata(music_id: str, payload: SampleMetaUpdatePayload)
 @app.get("/api/images/{image_id}")
 async def get_image_file(image_id: str):
     config = STORAGE_MAP["image"]
-    idx = await run_io(_read_json_sync, config["index"])
+    idx = await asset_service.read_index("image")
     entry = next((i for i in idx if i["id"] == image_id), None)
     if not entry:
         raise HTTPException(404, "Image not found")
@@ -1773,14 +1686,8 @@ async def get_image_file(image_id: str):
 
 @app.put("/api/images/{image_id}")
 async def update_image_metadata(image_id: str, payload: SampleMetaUpdatePayload):
-    config = STORAGE_MAP["image"]
-    index_path = config["index"]
-
     try:
-        index_data = await run_io(_read_json_sync, index_path)
-        if not isinstance(index_data, list):
-            raise HTTPException(500, "Index corrupted")
-
+        index_data = await asset_service.read_index("image")
         entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == image_id), -1)
         if entry_idx == -1:
             raise HTTPException(404, "Image not found")
@@ -1814,7 +1721,7 @@ async def update_image_metadata(image_id: str, payload: SampleMetaUpdatePayload)
 @app.get("/api/videos/{video_id}")
 async def get_video_file(video_id: str):
     config = STORAGE_MAP["video"]
-    idx = await run_io(_read_json_sync, config["index"])
+    idx = await asset_service.read_index("video")
     entry = next((i for i in idx if i["id"] == video_id), None)
     if not entry:
         raise HTTPException(404, "Video not found")
@@ -1847,14 +1754,8 @@ async def get_video_file(video_id: str):
 
 @app.put("/api/videos/{video_id}")
 async def update_video_metadata(video_id: str, payload: SampleMetaUpdatePayload):
-    config = STORAGE_MAP["video"]
-    index_path = config["index"]
-
     try:
-        index_data = await run_io(_read_json_sync, index_path)
-        if not isinstance(index_data, list):
-            raise HTTPException(500, "Index corrupted")
-
+        index_data = await asset_service.read_index("video")
         entry_idx = next((i for i, item in enumerate(index_data) if item.get("id") == video_id), -1)
         if entry_idx == -1:
             raise HTTPException(404, "Video not found")
@@ -1892,116 +1793,106 @@ async def sync_images_folder():
     config = STORAGE_MAP["image"]
     report = {"added": 0, "removed": 0}
 
-    async with INDEX_LOCK:
-        try:
-            blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
-            media_files = []
-            for b in blobs:
-                fname = b.name.replace(config["folder"], "")
-                if fname and not b.name.endswith(config["index"]):
-                    lower = fname.lower()
-                    if lower.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
-                        media_files.append({
-                            "filename": fname,
-                            "name": fname,
-                            "size": b.size,
-                            "url": b.public_url
-                        })
+    try:
+        blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
+        media_files = []
+        for b in blobs:
+            fname = b.name.replace(config["folder"], "")
+            if fname and not b.name.endswith(config["index"]):
+                lower = fname.lower()
+                if lower.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+                    media_files.append({
+                        "filename": fname,
+                        "name": fname,
+                        "size": b.size,
+                        "url": b.public_url
+                    })
 
-            index_data = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index_data, list):
-                index_data = []
+        index_data = await asset_service.read_index("image")
+        index_map = {item["filename"]: item for item in index_data}
+        disk_set = set(f["filename"] for f in media_files)
 
-            index_map = {item["filename"]: item for item in index_data}
-            disk_set = set(f["filename"] for f in media_files)
+        new_index = [item for item in index_data if item["filename"] in disk_set]
+        report["removed"] = len(index_data) - len(new_index)
 
-            new_index = [item for item in index_data if item["filename"] in disk_set]
-            report["removed"] = len(index_data) - len(new_index)
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        for file_info in media_files:
+            if file_info["filename"] not in index_map:
+                new_index.insert(0, {
+                    "id": str(uuid.uuid4()),
+                    "filename": file_info["filename"],
+                    "name": file_info["name"],
+                    "type": "image",
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "author": "Unknown",
+                    "description": "",
+                    "rating": None,
+                    "url": file_info["url"],
+                    "size": file_info["size"],
+                    "updated_at": now,
+                })
+                report["added"] += 1
 
-            for file_info in media_files:
-                if file_info["filename"] not in index_map:
-                    new_entry = {
-                        "id": str(uuid.uuid4()),
-                        "filename": file_info["filename"],
-                        "name": file_info["name"],
-                        "type": "image",
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "author": "Unknown",
-                        "description": "",
-                        "rating": None,
-                        "url": file_info["url"],
-                        "size": file_info["size"]
-                    }
-                    new_index.insert(0, new_entry)
-                    report["added"] += 1
+        if report["added"] > 0 or report["removed"] > 0:
+            await asset_service.write_index("image", new_index)
 
-            if report["added"] > 0 or report["removed"] > 0:
-                await run_io(_write_json_sync, config["index"], new_index)
-                await cache_delete("library:image")
-                await cache_delete("library:all")
-
-            report["total"] = len(new_index)
-            return report
-        except Exception as e:
-            raise HTTPException(500, f"Failed to sync images: {str(e)}")
+        report["total"] = len(new_index)
+        return report
+    except Exception as e:
+        raise HTTPException(500, f"Failed to sync images: {str(e)}")
 
 @app.post("/api/admin/sync-videos")
 async def sync_videos_folder():
     config = STORAGE_MAP["video"]
     report = {"added": 0, "removed": 0}
 
-    async with INDEX_LOCK:
-        try:
-            blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
-            media_files = []
-            for b in blobs:
-                fname = b.name.replace(config["folder"], "")
-                if fname and not b.name.endswith(config["index"]):
-                    lower = fname.lower()
-                    if lower.endswith(('.mp4', '.webm', '.mov')):
-                        media_files.append({
-                            "filename": fname,
-                            "name": fname,
-                            "size": b.size,
-                            "url": b.public_url
-                        })
+    try:
+        blobs = await run_io(lambda: list(bucket.list_blobs(prefix=config["folder"])))
+        media_files = []
+        for b in blobs:
+            fname = b.name.replace(config["folder"], "")
+            if fname and not b.name.endswith(config["index"]):
+                lower = fname.lower()
+                if lower.endswith(('.mp4', '.webm', '.mov')):
+                    media_files.append({
+                        "filename": fname,
+                        "name": fname,
+                        "size": b.size,
+                        "url": b.public_url
+                    })
 
-            index_data = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index_data, list):
-                index_data = []
+        index_data = await asset_service.read_index("video")
+        index_map = {item["filename"]: item for item in index_data}
+        disk_set = set(f["filename"] for f in media_files)
 
-            index_map = {item["filename"]: item for item in index_data}
-            disk_set = set(f["filename"] for f in media_files)
+        new_index = [item for item in index_data if item["filename"] in disk_set]
+        report["removed"] = len(index_data) - len(new_index)
 
-            new_index = [item for item in index_data if item["filename"] in disk_set]
-            report["removed"] = len(index_data) - len(new_index)
+        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        for file_info in media_files:
+            if file_info["filename"] not in index_map:
+                new_index.insert(0, {
+                    "id": str(uuid.uuid4()),
+                    "filename": file_info["filename"],
+                    "name": file_info["name"],
+                    "type": "video",
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "author": "Unknown",
+                    "description": "",
+                    "rating": None,
+                    "url": file_info["url"],
+                    "size": file_info["size"],
+                    "updated_at": now,
+                })
+                report["added"] += 1
 
-            for file_info in media_files:
-                if file_info["filename"] not in index_map:
-                    new_entry = {
-                        "id": str(uuid.uuid4()),
-                        "filename": file_info["filename"],
-                        "name": file_info["name"],
-                        "type": "video",
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "author": "Unknown",
-                        "description": "",
-                        "rating": None,
-                        "url": file_info["url"],
-                        "size": file_info["size"]
-                    }
-                    new_index.insert(0, new_entry)
-                    report["added"] += 1
+        if report["added"] > 0 or report["removed"] > 0:
+            await asset_service.write_index("video", new_index)
 
-            if report["added"] > 0 or report["removed"] > 0:
-                await run_io(_write_json_sync, config["index"], new_index)
-                await cache_delete("library:video")
-                await cache_delete("library:all")
-
-            report["total"] = len(new_index)
-            return report
-        except Exception as e:
-            raise HTTPException(500, f"Failed to sync videos: {str(e)}")
+        report["total"] = len(new_index)
+        return report
+    except Exception as e:
+        raise HTTPException(500, f"Failed to sync videos: {str(e)}")
 
 @app.post("/api/admin/sync")
 async def sync_gcs_storage(type: Optional[str] = Query(None, alias="type")):
@@ -2131,7 +2022,7 @@ async def sync_gcs_storage(type: Optional[str] = Query(None, alias="type")):
 
 @app.post("/api/admin/seed-test-samples")
 async def seed_test_samples():
-    config = STORAGE_MAP["sample"]
+    """Creates test sample entries for development."""
     test_samples = [
         {"id": "test-flac-001", "name": "Test Ambient Track.flac", "filename": "test-flac-001.flac",
          "type": "sample", "author": "Test Artist", "date": "2024-02-09", "description": "Test ambient", "rating": 8, "genre": "ambient"},
@@ -2140,30 +2031,23 @@ async def seed_test_samples():
         {"id": "test-flac-003", "name": "Unrated Demo.flac", "filename": "test-flac-003.flac",
          "type": "sample", "author": "Unknown", "date": "2024-02-09", "description": "Demo", "rating": None, "genre": None}
     ]
-    
-    async with INDEX_LOCK:
-        try:
-            index_data = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index_data, list):
-                index_data = []
-            
-            existing_ids = {item.get("id") for item in index_data}
-            added = 0
-            for sample in test_samples:
-                if sample["id"] not in existing_ids:
-                    index_data.insert(0, sample)
-                    added += 1
-            
-            await run_io(_write_json_sync, config["index"], index_data)
-            await cache_delete("library:sample")
-            await cache_delete("library:all")
-            return {"success": True, "added": added, "total": len(index_data)}
-        except Exception as e:
-            raise HTTPException(500, f"Failed to seed: {str(e)}")
+
+    try:
+        index_data = await asset_service.read_index("sample")
+        existing_ids = {item.get("id") for item in index_data}
+        added = 0
+        for sample in test_samples:
+            if sample["id"] not in existing_ids:
+                index_data.insert(0, sample)
+                added += 1
+        if added:
+            await asset_service.write_index("sample", index_data)
+        return {"success": True, "added": added, "total": len(index_data)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to seed: {str(e)}")
 
 @app.post("/api/admin/seed-brainfuck-examples")
 async def seed_brainfuck_examples():
-    config = STORAGE_MAP["brainfuck"]
     examples = [
         {"id": "bf-mandelbrot", "name": "Mandelbrot Set", "type": "brainfuck", "author": "Classic BF",
          "date": "2026-03-07", "description": "bf2wasm + -O3", "filename": "mandelbrot.bf",
@@ -2175,19 +2059,20 @@ async def seed_brainfuck_examples():
          "date": "2026-03-07", "description": "brainfuck2wasm", "filename": "sieve.bf",
          "execution_time_ms": 184, "cells": 16384, "relative_to_cpp": 0.22, "relative_to_js": 1.9}
     ]
-    
-    async with INDEX_LOCK:
-        idx = await run_io(_read_json_sync, config["index"]) or []
+
+    try:
+        idx = await asset_service.read_index("brainfuck")
         existing_ids = {item.get("id") for item in idx}
         added = 0
         for ex in examples:
             if ex["id"] not in existing_ids:
                 idx.insert(0, ex)
                 added += 1
-        await run_io(_write_json_sync, config["index"], idx)
-        await cache_delete("library:brainfuck")
-        await cache_delete("library:all")
+        if added:
+            await asset_service.write_index("brainfuck", idx)
         return {"success": True, "added": added, "total": len(idx)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to seed: {str(e)}")
 
 # ========================= STORAGE LISTING =========================
 
@@ -2271,7 +2156,8 @@ async def get_ftp_shader(filename: str):
         await cache_set(cache_key, code, ttl=3600)
         return {"source": "ftp", "filename": filename, "code": code}
     except Exception as e:
-            _log_event("ftp_fetch_failed", level="error", filename=filename, error=str(e))
+        _log_event("ftp_fetch_failed", level="error", filename=filename, error=str(e))
+        raise HTTPException(500, f"Failed to fetch shader from FTP: {str(e)}")
 
 @app.post("/api/admin/sync-ftp-to-gcs")
 async def sync_ftp_to_gcs():
@@ -2281,46 +2167,44 @@ async def sync_ftp_to_gcs():
     config = STORAGE_MAP["shader"]
     report = {"added": 0, "skipped": 0, "errors": []}
 
-    async with INDEX_LOCK:
-        try:
-            ftp_files = await run_io(_list_ftp_files_sync)
-            index = await run_io(_read_json_sync, config["index"])
-            if not isinstance(index, list):
-                index = []
-            existing = {item.get("filename", "") for item in index}
+    try:
+        ftp_files = await run_io(_list_ftp_files_sync)
+        index = await asset_service.read_index("shader")
+        existing = {item.get("filename", "") for item in index}
 
-            for fname in ftp_files:
-                if fname in existing:
-                    report["skipped"] += 1
-                    continue
-                try:
-                    code = await run_io(_fetch_ftp_file_sync, fname)
-                    blob = bucket.blob(f"{config['folder']}{fname}")
-                    await run_io(blob.upload_from_string, code, content_type="text/plain")
-                    shader_id = fname.replace(".wgsl", "")
-                    index.insert(0, {
-                        "id": shader_id,
-                        "name": shader_id.replace("-", " ").title(),
-                        "filename": fname,
-                        "author": "ftp-import",
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "type": "shader",
-                        "description": "Imported from FTP",
-                        "tags": ["ftp-import"],
-                        "stars": 0.0,
-                        "rating_count": 0,
-                        "play_count": 0
-                    })
-                    report["added"] += 1
-                except Exception as e:
-                    _log_event("ftp_import_failed", level="error", filename=fname, error=str(e))
-                    report["errors"].append({"file": fname, "error": str(e)})
+        for fname in ftp_files:
+            if fname in existing:
+                report["skipped"] += 1
+                continue
+            try:
+                code = await run_io(_fetch_ftp_file_sync, fname)
+                blob = bucket.blob(f"{config['folder']}{fname}")
+                await run_io(blob.upload_from_string, code, content_type="text/plain")
+                shader_id = fname.replace(".wgsl", "")
+                index.insert(0, {
+                    "id": shader_id,
+                    "name": shader_id.replace("-", " ").title(),
+                    "filename": fname,
+                    "author": "ftp-import",
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "type": "shader",
+                    "description": "Imported from FTP",
+                    "tags": ["ftp-import"],
+                    "stars": 0.0,
+                    "rating_count": 0,
+                    "play_count": 0,
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                })
+                report["added"] += 1
+            except Exception as e:
+                _log_event("ftp_import_failed", level="error", filename=fname, error=str(e))
+                report["errors"].append({"file": fname, "error": str(e)})
 
-            if report["added"] > 0:
-                await run_io(_write_json_sync, config["index"], index)
-            await cache_clear()
-        except Exception as e:
-            raise HTTPException(500, f"FTP sync failed: {str(e)}")
+        if report["added"] > 0:
+            await asset_service.write_index("shader", index)
+
+    except Exception as e:
+        raise HTTPException(500, f"FTP sync failed: {str(e)}")
 
     report["total"] = len(index)
     return report
