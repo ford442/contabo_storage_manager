@@ -275,13 +275,25 @@ async def get_music_file(track_id: str):
     music_dir = _get_music_dir()
     
     # Try different audio formats, including FLAC
+    # Files are named {track_id}_{name}.{ext}
     for ext in [".flac", ".mp3", ".ogg", ".wav", ".m4a", ".opus"]:
+        # First try exact match
         file_path = music_dir / f"{track_id}{ext}"
         if file_path.exists():
             return FileResponse(
                 file_path,
                 media_type=_SONG_MIME_TYPES.get(ext, f"audio/{ext[1:]}"),
                 filename=f"{track_id}{ext}"
+            )
+        
+        # Then try with wildcard pattern (track_id_*.ext)
+        matches = list(music_dir.glob(f"{track_id}_*{ext}"))
+        if matches:
+            file_path = matches[0]
+            return FileResponse(
+                file_path,
+                media_type=_SONG_MIME_TYPES.get(ext, f"audio/{ext[1:]}"),
+                filename=file_path.name
             )
     
     raise HTTPException(status_code=404, detail="Audio file not found")
@@ -349,12 +361,23 @@ async def get_sample_file(sample_id: str):
     
     # Try different audio formats
     for ext in [".mp3", ".ogg", ".wav", ".m4a"]:
+        # First try exact match
         file_path = samples_dir / f"{sample_id}{ext}"
         if file_path.exists():
             return FileResponse(
                 file_path,
                 media_type=f"audio/{ext[1:]}",
                 filename=f"{sample_id}{ext}"
+            )
+        
+        # Then try with wildcard pattern (sample_id_*.ext)
+        matches = list(samples_dir.glob(f"{sample_id}_*{ext}"))
+        if matches:
+            file_path = matches[0]
+            return FileResponse(
+                file_path,
+                media_type=f"audio/{ext[1:]}",
+                filename=file_path.name
             )
     
     raise HTTPException(status_code=404, detail="Sample file not found")
