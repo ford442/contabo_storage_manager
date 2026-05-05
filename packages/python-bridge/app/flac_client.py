@@ -71,10 +71,12 @@ async def register_song_with_flac_player(
     Returns the decoded JSON response on success, or None on failure / when
     FLAC_PLAYER_API_URL is not configured.
     """
-    url = settings.flac_player_api_url
-    if not url:
+    base_url = settings.flac_player_api_url
+    if not base_url:
         logger.debug("FLAC_PLAYER_API_URL not configured; skipping external registration")
         return None
+
+    url = base_url.rstrip('/') + '/api/upload/songs'
 
     payload = _build_payload(
         filename=filename,
@@ -138,10 +140,12 @@ def register_song_with_flac_player_sync(
     This blocking variant is safe to call from synchronous contexts such as
     watchdog file-system event handlers or CLI scripts.
     """
-    url = settings.flac_player_api_url
-    if not url:
+    base_url = settings.flac_player_api_url
+    if not base_url:
         logger.debug("FLAC_PLAYER_API_URL not configured; skipping external registration")
         return None
+
+    url = base_url.rstrip('/') + '/api/upload/songs'
 
     payload = _build_payload(
         filename=filename,

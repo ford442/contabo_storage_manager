@@ -48,17 +48,19 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enhanced CORS middleware - MUST be added before routers
-# CORSMiddleware must ALWAYS be installed so OPTIONS preflights are intercepted
-# at the middleware layer. Without it, router paths return 405 before the
-# catch-all @app.options route is reached.
-app.add_middleware(
-    CORSMiddleware,
-    **build_cors_middleware_options(
-        settings.cors_origins,
-        settings.cors_origin_regex,
-    ),
-)
+# CORS is handled by nginx for /api/, /files/, and /models/ locations.
+# Nginx has been configured to add CORS headers (Access-Control-Allow-Origin: *)
+# so we disable FastAPI's CORSMiddleware to avoid duplicate headers.
+# The custom @app.middleware("http") add_cors_headers below serves as a fallback
+# for any routes that bypass nginx CORS handling.
+#
+# app.add_middleware(
+#     CORSMiddleware,
+#     **build_cors_middleware_options(
+#         settings.cors_origins,
+#         settings.cors_origin_regex,
+#     ),
+# )
 
 @app.on_event("startup")
 async def startup_event():
