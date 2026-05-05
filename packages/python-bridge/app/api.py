@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Union
 
+import asyncio
 import os
 import uuid
 from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Request
@@ -1078,23 +1079,24 @@ async def upload_song(
     else:
         logger.info("Song %s already in index, skipping duplicate append", storage_filename)
 
-    # Notify external FLAC Player backend if configured
-    base_url = str(settings.static_base_url).rstrip("/")
+    # Fire the FLAC Player webhook without blocking the upload response.
+    # register_song_with_flac_player logs its own errors, so failures are silent here.
     public_url = f"{base_url}/audio/music/{storage_filename}"
     rounded_duration_sec = round(duration_sec, 2)
-    await register_song_with_flac_player(
-        filename=song["name"],
-        public_url=public_url,
-        title=title,
-        author=author,
-        tags=tag_list,
-        genre=genre or None,
-        duration=rounded_duration_sec if duration_sec is not None else None,
-        filename_on_storage=storage_filename,
-        auto_enrich=True,
-        song_id=song_id,
+    asyncio.create_task(
+        register_song_with_flac_player(
+            filename=song["name"],
+            public_url=public_url,
+            title=title,
+            author=author,
+            tags=tag_list,
+            genre=genre or None,
+            duration=rounded_duration_sec if duration_sec is not None else None,
+            filename_on_storage=storage_filename,
+            auto_enrich=True,
+            song_id=song_id,
+        )
     )
-
 
     return {
         "success": True,
