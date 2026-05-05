@@ -301,6 +301,14 @@ async def get_music_file(track_id: str):
     
     raise HTTPException(status_code=404, detail="Audio file not found")
 
+@audio_router.get("/music/{track_id}")
+async def get_music_file_alias(track_id: str):
+    """Alias to stream a music track file directly by ID.
+    
+    The FLAC player frontend expects audio files at /api/music/{track_id} 
+    without the /file suffix. This alias fulfills that request.
+    """
+    return await get_music_file(track_id)
 
 @audio_router.post("/music")
 async def add_music_track(track: MusicTrack):
