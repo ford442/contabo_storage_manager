@@ -274,13 +274,13 @@ async def get_music_file(track_id: str):
     """Stream a music track file."""
     music_dir = _get_music_dir()
     
-    # Try different audio formats
-    for ext in [".mp3", ".ogg", ".wav", ".m4a"]:
+    # Try different audio formats, including FLAC
+    for ext in [".flac", ".mp3", ".ogg", ".wav", ".m4a", ".opus"]:
         file_path = music_dir / f"{track_id}{ext}"
         if file_path.exists():
             return FileResponse(
                 file_path,
-                media_type=f"audio/{ext[1:]}",
+                media_type=_SONG_MIME_TYPES.get(ext, f"audio/{ext[1:]}"),
                 filename=f"{track_id}{ext}"
             )
     
