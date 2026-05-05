@@ -37,6 +37,15 @@ class SaveFileRequest(BaseModel):
     content: str
 
 
+class MkdirRequest(BaseModel):
+    path: str
+
+
+class RenameRequest(BaseModel):
+    path: str
+    new_path: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -177,3 +186,54 @@ async def delete_file(path: str = Query(..., description="Relative file path ins
 
     target.unlink()
     return {"success": True, "deleted": path}
+
+
+@vps_browser_router.post("/save")
+async def save_file_post(body: SaveFileRequest):
+    """Create or overwrite a text file with new content.
+
+    Unlike PUT /file, this also creates new files — useful for saving
+    unsaved editor buffers for the first time.
+    """
+    target = _resolve(body.path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists() and not target.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is a directory: {body.path}")
+
+    target.write_text(body.content, encoding="utf-8")
+    stat = target.stat()
+
+    return {
+        "success": True,
+        "path": _rel(target),
+        "size": stat.st_size,
+    }
+
+
+@vps_browser_router.post("/mkdir")
+async def make_directory(body: MkdirRequest):
+    """Create a directory (and any missing parents) on the VPS."""
+    target = _resolve(body.path)
+
+    if target.exists() and not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path exists and is not a directory: {body.path}")
+
+    target.mkdir(parents=True, exist_ok=True)
+    return {"success": True, "path": _rel(target)}
+
+
+@vps_browser_router.post("/rename")
+async def rename_file(body: RenameRequest):
+    """Rename or move a file or directory within the storage root."""
+    src = _resolve(body.path)
+    dst = _resolve(body.new_path)
+
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"Source not found: {body.path}")
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"Destination already exists: {body.new_path}")
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+    return {"success": True, "path": _rel(dst)}

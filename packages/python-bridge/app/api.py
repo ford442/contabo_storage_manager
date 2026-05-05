@@ -619,7 +619,12 @@ async def list_songs(
     
     # Apply filters
     if type is not None:
-        songs = [s for s in songs if s.get("type") == type]
+        # "song" and null/None are equivalent — songs predate the type field.
+        # Only "video" and other explicit types are stored as non-null.
+        if type in ("song", "audio"):
+            songs = [s for s in songs if s.get("type") in (None, "song", "audio")]
+        else:
+            songs = [s for s in songs if s.get("type") == type]
     if rating_gte is not None:
         songs = [s for s in songs if (s.get("rating") or 0) >= rating_gte]
     if rating_lt is not None:
@@ -870,75 +875,63 @@ async def delete_song(song_id: str):
 
 @api_router.get("/music/{song_id}")
 async def stream_music_file(song_id: str):
-    """Stream a music file by song ID."""
+    """Stream a music file by song ID.
+
+    Resolution order:
+    1. songs.json index → use the stored filename directly (fast path)
+    2. Exact match: {song_id}.{ext} on disk
+    3. Prefix match: {song_id}_*.{ext} (upload naming convention)
+    4. Substring match: *{song_id}*.{ext} (last resort)
+
+    Falls through all disk checks even when the song is absent from songs.json,
+    so files that exist on disk but haven't been re-indexed are still served.
+    """
+    audio_dir = Path(settings.files_dir) / "audio" / "music"
+
+    _EXT_MIME: dict[str, str] = {
+        ".flac": "audio/flac",
+        ".wav": "audio/wav",
+        ".ogg": "audio/ogg",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+    }
+    _EXTS = list(_EXT_MIME)
+
+    def _serve(path: Path) -> FileResponse:
+        return FileResponse(
+            path,
+            media_type=_EXT_MIME.get(path.suffix.lower(), "audio/mpeg"),
+            headers={"Accept-Ranges": "bytes"},
+        )
+
+    # 1. Check the index for a stored filename (avoids a glob on every request).
     songs = _load_songs()
     song = next((s for s in songs if s.get("id") == song_id), None)
-    if not song:
-        raise HTTPException(status_code=404, detail="Song not found")
-    
-    # Get the audio directory
-    base = Path(settings.files_dir)
-    audio_dir = base / "audio" / "music"
-    
-    def _media_type_for_ext(path: Path) -> str:
-        ext = path.suffix.lower()
-        if ext == ".flac":
-            return "audio/flac"
-        elif ext == ".wav":
-            return "audio/wav"
-        elif ext == ".ogg":
-            return "audio/ogg"
-        elif ext == ".mp3":
-            return "audio/mpeg"
-        elif ext == ".m4a":
-            return "audio/mp4"
-        elif ext == ".aac":
-            return "audio/aac"
-        return "audio/mpeg"
+    if song:
+        filename = song.get("filename")
+        if filename:
+            file_path = audio_dir / filename
+            if file_path.exists():
+                return _serve(file_path)
 
-    # Try to find the file by filename or song_id
-    filename = song.get("filename")
-    if filename:
-        file_path = audio_dir / filename
-        if file_path.exists():
-            return FileResponse(
-                file_path,
-                media_type=_media_type_for_ext(file_path),
-                headers={"Accept-Ranges": "bytes"}
-            )
+    # 2. Exact match: {song_id}.{ext}
+    for ext in _EXTS:
+        p = audio_dir / f"{song_id}{ext}"
+        if p.exists():
+            return _serve(p)
 
-    # Try common extensions with the exact song_id
-    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
-        file_path = audio_dir / f"{song_id}{ext}"
-        if file_path.exists():
-            return FileResponse(
-                file_path,
-                media_type=_media_type_for_ext(file_path),
-                headers={"Accept-Ranges": "bytes"}
-            )
+    # 3. Prefix match: {song_id}_*.{ext}  (upload convention: {id}_{title}.flac)
+    for ext in _EXTS:
+        matches = list(audio_dir.glob(f"{song_id}_*{ext}"))
+        if matches:
+            return _serve(matches[0])
 
-    # Fallback: the upload endpoint names files {song_id}_{title}.flac,
-    # so look for any file starting with {song_id}_
-    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
-        candidates = list(audio_dir.glob(f"{song_id}_*{ext}"))
-        if candidates:
-            file_path = candidates[0]
-            return FileResponse(
-                file_path,
-                media_type=_media_type_for_ext(file_path),
-                headers={"Accept-Ranges": "bytes"}
-            )
-
-    # Last resort: look for any file containing the song_id anywhere in the name
-    for ext in [".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"]:
-        candidates = list(audio_dir.glob(f"*{song_id}*{ext}"))
-        if candidates:
-            file_path = candidates[0]
-            return FileResponse(
-                file_path,
-                media_type=_media_type_for_ext(file_path),
-                headers={"Accept-Ranges": "bytes"}
-            )
+    # 4. Substring match anywhere in filename
+    for ext in _EXTS:
+        matches = list(audio_dir.glob(f"*{song_id}*{ext}"))
+        if matches:
+            return _serve(matches[0])
 
     raise HTTPException(status_code=404, detail="Audio file not found")
 
@@ -973,6 +966,66 @@ async def suggest_song_tags(song_id: str):
     suggestions = [s for s in suggestions if s not in existing]
     
     return {"suggestions": list(set(suggestions)), "source": "auto"}
+
+
+@api_router.post("/songs/scan")
+async def scan_songs():
+    """Scan the audio/music directory and add any unindexed files to songs.json.
+
+    Safe to call repeatedly — existing entries are never overwritten.
+    Returns a list of newly added filenames.
+    """
+    audio_dir = Path(settings.files_dir) / "audio" / "music"
+    if not audio_dir.exists():
+        return {"added": [], "message": "Audio directory does not exist"}
+
+    songs = _load_songs()
+    indexed = {s.get("filename") for s in songs if s.get("filename")}
+
+    audio_exts = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".aac"}
+    base_url = str(settings.static_base_url).rstrip("/")
+    added = []
+
+    for path in sorted(audio_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in audio_exts:
+            continue
+        if path.name in indexed:
+            continue
+
+        import re as _re
+        m = _re.match(r"^([0-9a-f]{8})_(.+)\.[^.]+$", path.name, _re.IGNORECASE)
+        if m:
+            song_id = m.group(1)
+            raw_title = m.group(2).replace("_", " ")
+        else:
+            song_id = str(uuid.uuid4())[:8]
+            raw_title = path.stem.replace("_", " ")
+
+        songs.append({
+            "id":          song_id,
+            "name":        path.name,
+            "title":       raw_title.strip() or "Untitled",
+            "author":      "Noah Cohn",
+            "genre":       None,
+            "rating":      None,
+            "description": f"Auto-indexed on {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+            "tags":        [],
+            "duration":    None,
+            "play_count":  0,
+            "last_played": None,
+            "created_at":  datetime.now(timezone.utc).isoformat(),
+            "filename":    path.name,
+            "url":         f"{base_url}/audio/music/{path.name}",
+            "size":        path.stat().st_size,
+            "type":        None,
+        })
+        added.append(path.name)
+
+    if added:
+        _save_songs(songs)
+        logger.info("scan_songs: indexed %d new file(s)", len(added))
+
+    return {"added": added, "total_indexed": len(songs)}
 
 
 @api_router.post("/songs/upload")
