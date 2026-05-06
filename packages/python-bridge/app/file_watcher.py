@@ -1,6 +1,5 @@
 """File watcher for VPS storage - monitors directories and updates API."""
 
-import asyncio
 import logging
 import re
 import time
@@ -12,7 +11,6 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileMovedEvent
 
 from .config import settings
-from .flac_client import register_song_with_flac_player_sync
 
 logger = logging.getLogger(__name__)
 
@@ -111,19 +109,8 @@ def _handle_new_audio(path: Path):
     _save_songs(songs)
     logger.info(f"Auto-indexed new audio file: {filename} -> {song_id}")
 
-    # Push to external FLAC Player backend so the track appears instantly
-    register_song_with_flac_player_sync(
-        filename=song["name"],
-        public_url=public_url,
-        title=title,
-        author="Unknown",
-        tags=[],
-        genre=None,
-        duration=None,
-        filename_on_storage=filename,
-        auto_enrich=True,
-        song_id=song_id,
-    )
+    # Song metadata is written directly to local songs.json;
+    # the static React flac_player app reads from /api/songs.
 
 
 def _handle_new_note(path: Path):

@@ -73,7 +73,7 @@ async def register_song_with_flac_player(
     """
     base_url = settings.flac_player_api_url
     if not base_url:
-        logger.debug("FLAC_PLAYER_API_URL not configured; skipping external registration")
+        logger.warning("FLAC_PLAYER_API_URL not configured; skipping external registration")
         return None
 
     url = base_url.rstrip('/') + '/api/upload/songs'
@@ -142,7 +142,7 @@ def register_song_with_flac_player_sync(
     """
     base_url = settings.flac_player_api_url
     if not base_url:
-        logger.debug("FLAC_PLAYER_API_URL not configured; skipping external registration")
+        logger.warning("FLAC_PLAYER_API_URL not configured; skipping external registration")
         return None
 
     url = base_url.rstrip('/') + '/api/upload/songs'

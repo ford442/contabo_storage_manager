@@ -15,7 +15,6 @@ from .config import settings
 from .models import FileUploadResponse
 from .ftp_client import ftp_client
 from .notes_router import _slugify
-from .flac_client import register_song_with_flac_player
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
@@ -239,20 +238,8 @@ async def flac_webhook(
         _save_songs(songs)
         logger.info("Auto-indexed webhook upload %s -> %s", storage_filename, song_id)
 
-        # --- Notify external FLAC Player backend if configured ---
-        base_url = str(settings.static_base_url).rstrip("/")
-        public_url = f"{base_url}/{result['local_path']}"
-        await register_song_with_flac_player(
-            filename=song["name"],
-            public_url=public_url,
-            title=title,
-            author="Unknown",
-            tags=song.get("tags", []),
-            genre=song.get("genre"),
-            duration=song.get("duration"),
-            filename_on_storage=storage_filename,
-            song_id=song_id,
-        )
+        # Song metadata is written directly to local songs.json;
+        # the static React flac_player app reads from /api/songs.
 
     # TODO: Add handling for "save_playlist" and "save_metadata" (JSON only)
 

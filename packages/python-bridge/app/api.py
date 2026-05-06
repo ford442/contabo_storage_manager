@@ -7,7 +7,6 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Union
 
-import asyncio
 import os
 import uuid
 from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Request
@@ -15,7 +14,6 @@ from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
-from .flac_client import register_song_with_flac_player
 from .ftp_client import ftp_client
 from . import presets
 from pydub import AudioSegment
@@ -1132,24 +1130,8 @@ async def upload_song(
     else:
         logger.info("Song %s already in index, skipping duplicate append", storage_filename)
 
-    # Fire the FLAC Player webhook without blocking the upload response.
-    # register_song_with_flac_player logs its own errors, so failures are silent here.
-    public_url = f"{base_url}/audio/music/{storage_filename}"
-    rounded_duration_sec = round(duration_sec, 2)
-    asyncio.create_task(
-        register_song_with_flac_player(
-            filename=song["name"],
-            public_url=public_url,
-            title=title,
-            author=author,
-            tags=tag_list,
-            genre=genre or None,
-            duration=rounded_duration_sec if duration_sec is not None else None,
-            filename_on_storage=storage_filename,
-            auto_enrich=True,
-            song_id=song_id,
-        )
-    )
+    # Song metadata is written directly to local songs.json;
+    # the static React flac_player app reads from /api/songs.
 
     return {
         "success": True,

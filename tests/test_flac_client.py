@@ -39,7 +39,7 @@ async def test_register_song_forwards_extended_metadata(monkeypatch):
     monkeypatch.setattr(
         flac_client.settings,
         "flac_player_api_url",
-        "https://flac.example/api/upload/songs",
+        "https://flac.example",
     )
     monkeypatch.setattr(flac_client.httpx, "AsyncClient", FakeAsyncClient)
 

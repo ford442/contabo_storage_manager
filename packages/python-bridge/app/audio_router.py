@@ -6,8 +6,6 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import asyncio
-from .flac_client import register_song_with_flac_player
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -354,25 +352,6 @@ async def add_music_track(track: MusicTrack):
     tracks.append(track_data)
     
     _save_music_index(tracks)
-    
-    # --- NEW: Trigger FLAC Player Webhook ---
-    # Construct the file name and URL based on your existing URL patterns
-    filename = f"{track.id}.mp3" 
-    public_url = track.url if track.url else f"{settings.static_base_url}/audio/music/{filename}"
-    
-    # Run the webhook in the background so it doesn't block the API response
-    asyncio.create_task(
-        register_song_with_flac_player(
-            filename=filename,
-            public_url=public_url,
-            title=track.title,
-            author=track.artist if track.artist else "Noah",
-            tags=track.tags,
-            duration=track.duration,
-            song_id=track.id
-        )
-    )
-    # ----------------------------------------
     
     return {"status": "added", "track": track_data}
 
