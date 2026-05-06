@@ -4,13 +4,13 @@ import json
 import logging
 from datetime import UTC, datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import asyncio
 from .flac_client import register_song_with_flac_player
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
@@ -124,6 +124,36 @@ def _song_file_path(dir_name: str, filename: str) -> Path:
 def _song_file_url(dir_name: str, filename: str) -> str:
     base = settings.static_base_url.rstrip("/")
     return f"{base}/songs/dirs/{dir_name}/{filename}"
+
+
+def _parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
+    """Parse HTTP Range header, returns (start, end) byte positions."""
+    try:
+        if not range_header.startswith("bytes="):
+            raise ValueError("Invalid range unit")
+        range_spec = range_header[6:]
+        if "-" not in range_spec:
+            raise ValueError("Invalid range format")
+        start_str, end_str = range_spec.split("-", 1)
+        if start_str == "" and end_str != "":
+            end_val = int(end_str)
+            start = max(0, file_size - end_val)
+            end = file_size - 1
+        elif start_str != "" and end_str == "":
+            start = int(start_str)
+            end = file_size - 1
+        elif start_str != "" and end_str != "":
+            start = int(start_str)
+            end = min(int(end_str), file_size - 1)
+        else:
+            raise ValueError("Invalid range format")
+        if start < 0 or start >= file_size:
+            raise ValueError("Range start out of bounds")
+        if end < start:
+            raise ValueError("Range end before start")
+        return start, end
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=416, detail=f"Range not satisfiable: {e}")
 
 
 # ====================== Models ======================
@@ -490,9 +520,9 @@ async def list_song_dir_files(dir_name: str):
     return entries
 
 
-@audio_router.get("/songs/dirs/{dir_name}/{filename}")
-async def serve_song_dir_file(dir_name: str, filename: str):
-    """Serve a raw audio file from a song directory."""
+@audio_router.head("/songs/dirs/{dir_name}/{filename}")
+async def head_song_dir_file(dir_name: str, filename: str):
+    """Return headers for a song file without the body."""
     _validate_song_dir(dir_name)
     _validate_song_filename(filename)
     path = _song_file_path(dir_name, filename)
@@ -501,4 +531,79 @@ async def serve_song_dir_file(dir_name: str, filename: str):
             status_code=404, detail=f"Song '{filename}' not found in '{dir_name}'."
         )
     media_type = _SONG_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
-    return FileResponse(path, media_type=media_type, filename=filename)
+    file_size = path.stat().st_size
+    return Response(
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": media_type,
+            "Cache-Control": "public, max-age=3600",
+        },
+        status_code=200,
+    )
+
+
+@audio_router.get("/songs/dirs/{dir_name}/{filename}")
+async def serve_song_dir_file(
+    dir_name: str,
+    filename: str,
+    range: Optional[str] = Header(None),
+):
+    """Serve a raw audio file from a song directory with HTTP range request support.
+
+    Range support allows the browser's HTMLAudioElement to stream audio
+    incrementally instead of downloading the full file before playback.
+    """
+    _validate_song_dir(dir_name)
+    _validate_song_filename(filename)
+    path = _song_file_path(dir_name, filename)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Song '{filename}' not found in '{dir_name}'."
+        )
+    media_type = _SONG_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    file_size = path.stat().st_size
+
+    if range:
+        start, end = _parse_range_header(range, file_size)
+        content_length = end - start + 1
+
+        def iter_range():
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                chunk_size = 64 * 1024
+                while remaining > 0:
+                    chunk = f.read(min(chunk_size, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            iter_range(),
+            status_code=206,
+            media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    # Full file — still advertise range support so the browser knows it can seek
+    def iter_full():
+        with open(path, "rb") as f:
+            while chunk := f.read(256 * 1024):
+                yield chunk
+
+    return StreamingResponse(
+        iter_full(),
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
