@@ -58,8 +58,11 @@ services:
   # ── Nginx static file server ─────────────────────────────────────────────────
   # Serves /home/ftpbridge/files directly so apps can load audio/MIDI/images
   # via HTTPS once you put a TLS-terminating proxy in front of port 8080.
+  # Built with Brotli compression module for efficient asset delivery.
   nginx-files:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
     container_name: ftpbridge-nginx
     restart: unless-stopped
     ports:

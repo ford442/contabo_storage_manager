@@ -1,0 +1,43 @@
+# Dockerfile.nginx
+# Builds nginx:alpine with Brotli compression module support
+FROM nginx:alpine
+
+RUN apk add --no-cache \
+    alpine-sdk \
+    linux-headers \
+    pcre-dev \
+    zlib-dev \
+    openssl-dev \
+    curl
+
+# Download nginx source matching the installed version
+RUN NGINX_VERSION=$(nginx -v 2>&1 | awk -F'[^0-9.]*' '{print $1}') && \
+    wget http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
+    tar xzf nginx-${NGINX_VERSION}.tar.gz && \
+    rm nginx-${NGINX_VERSION}.tar.gz
+
+# Download and build Brotli module
+RUN cd /tmp && \
+    git clone https://github.com/google/ngx_brotli.git && \
+    cd ngx_brotli && \
+    git submodule update --init --recursive
+
+# Build Brotli dynamic modules
+RUN NGINX_VERSION=$(nginx -v 2>&1 | awk -F'[^0-9.]*' '{print $1}') && \
+    cd /tmp/nginx-${NGINX_VERSION} && \
+    ./configure \
+      --with-compat \
+      --add-dynamic-module=/tmp/ngx_brotli && \
+    make modules && \
+    cp objs/ngx_http_brotli_filter_module.so /usr/local/nginx/modules/ && \
+    cp objs/ngx_http_brotli_static_module.so /usr/local/nginx/modules/
+
+# Copy modules to standard nginx modules directory
+RUN mkdir -p /etc/nginx/modules && \
+    cp /usr/local/nginx/modules/*.so /etc/nginx/modules/
+
+# Cleanup
+RUN rm -rf /tmp/nginx-* /tmp/ngx_brotli
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

@@ -6,6 +6,21 @@
 Both a **Python (FastAPI)** and a **Node.js (Express)** bridge are provided side-by-side.  
 Pick the one you prefer, or run both at the same time.
 
+## Brotli + Gzip Compression (NEW)
+
+The Nginx static file server now includes **Brotli compression** support for efficient delivery of large model files and assets. Compression is automatically enabled for:
+- Text (CSS, JSON, plain text)
+- JavaScript and WebAssembly (WASM)
+- Audio files (FLAC, MP3, WAV, OGG, MIDI)
+- Binary assets
+
+**Note:** The nginx container is now built from `Dockerfile.nginx` to include the Brotli module. This replaces the standard `nginx:alpine` image.
+
+**Rebuild after pulling changes:**
+```bash
+docker compose --profile storage up -d --build
+```
+
 ---
 
 ## Table of Contents
