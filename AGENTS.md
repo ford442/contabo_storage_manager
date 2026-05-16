@@ -321,6 +321,9 @@ contabo_storage_manager/
 | `GET`  | `/api/presets/{dir_name}/{filename}` | Get raw preset content |
 | `POST` | `/api/presets/{dir_name}` | Upload/overwrite a `.milk` file |
 | `DELETE`| `/api/presets/{dir_name}/{filename}` | Delete a `.milk` file |
+| `GET`  | `/api/presets/random` | Return a random preset (local URL if synced, else glsl fallback) |
+| `GET`  | `/api/presets/stats` | Preset index statistics |
+| `POST` | `/api/presets/rescan` | Rebuild cached preset indexes from glsl.1ink.us |
 
 #### Textures
 | `GET`  | `/api/textures/` | List texture directories with counts |
@@ -493,6 +496,7 @@ The project uses `pytest` with `asyncio_mode = "auto"`. Tests live in the `tests
 | `tests/test_cors.py` | CORS preflight behavior: allowed origins pass, unknown origins are rejected |
 | `tests/test_flac_client.py` | `flac_client.register_song_with_flac_player()` — forwards extended metadata when `FLAC_PLAYER_API_URL` is set, returns `None` when unset |
 | `tests/test_presets_router.py` | Full CRUD on `/api/presets` — list dirs, list files, upload `.milk`, download, delete, path-traversal rejection |
+| `tests/test_presets_random.py` | `/api/presets/random` — returns local URL when file exists, falls back to glsl URL when missing, 503 when empty |
 
 ```bash
 # Install dev dependencies
@@ -673,6 +677,7 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 - Uploaded FLAC files are mirrored to the external SFTP host under `EXTERNAL_FLAC_DIR` (default `flac_songs`) as a best-effort operation
 - `mod_router.py` uses `openmpt123 --info` to extract title, tracker (author), and duration from MOD files
 - `presets_router.py` whitelists 5 preset directories and enforces `.milk` extension; paths are resolved via a static mapping dict to prevent traversal
+- Presets must be synced locally (via `scripts/sync_presets.py`) before the VPS can serve them. `/api/presets/random` returns a local URL when the file exists on disk, falling back to the external `glsl.1ink.us` URL only when the local copy is missing
 - `textures_router.py` whitelists 3 texture directories and enforces image extensions (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tga`)
 - `cors.py` builds `CORSMiddleware` options dynamically: credentials are disabled when `*` is present in origins
 - `main.py` registers 13 routers in a specific order and installs both `CORSMiddleware` and a fallback `add_cors_headers` middleware

@@ -19,7 +19,7 @@ def create_client(cors_origins: str) -> TestClient:
         CORSMiddleware,
         **build_cors_middleware_options(
             cors_origins,
-            r"^https://([a-z0-9-]+\.)?(1ink\.us|noahcohn\.com)$|^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+            r"^https://([a-z0-9_-]+\.)?(1ink\.us|noahcohn\.com)$|^http://(localhost|127\.0\.0\.1)(:\d+)?$",
         ),
     )
 

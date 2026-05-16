@@ -1606,6 +1606,13 @@ async def get_random_preset(dir: Optional[str] = Query("any"), request: Request 
 
     result = presets.get_random_preset(dir_name=dir if dir != "any" else None)
 
+    # If the cached index has a result, prefer a local URL when the file exists
+    if result:
+        local_path = Path(settings.presets_dir) / result["dir"] / result["filename"]
+        if local_path.exists():
+            base = str(request.base_url).rstrip("/") if request else ""
+            result["url"] = f"{base}/api/presets/{result['dir']}/{result['filename']}"
+
     # Fallback: scan local directories directly if cache is empty
     if not result:
         candidates = []
