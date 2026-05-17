@@ -419,7 +419,9 @@ All share the **same single FTP account** configured in `.env`.
 │   ├── playlists/                   # Playlist JSON
 │   └── metadata/                    # Track metadata JSON
 │
-├── notes/                           # Plain-text markdown notes for rain_edit
+├── notes/                           # Plain-text markdown notes for rain_edit & cloud_notes
+│   ├── *.md                         # Note files (synced from apps or uploaded via /admin)
+│   └── webhook/                     # Archived webhook payloads from cloud_notes
 │
 └── sequencer/
     ├── projects/                    # Full project JSON files
@@ -578,20 +580,24 @@ const midiBuffer = await midiRes.arrayBuffer();
 
 ---
 
-### 4. rain_edit
+### 4. rain_edit & cloud_notes (Shared Note API)
 
-**Endpoint:** `/api/notes/*`  
+Both `rain_edit` and `cloud_notes` use the same `/api/notes/` REST API for storage and retrieval. Notes are stored as plain-text Markdown files directly on the VPS.
+
 **Storage:** `files/notes/<name>.md`
 
-`rain_edit` stores plain-text Markdown notes directly on the VPS. Notes are exposed through a simple REST API and are also watched by the file watcher, so dropping `.md` files into the Google Bucket under `notes/` makes them instantly available.
+Notes are exposed through a simple REST API and are also watched by the file watcher, so dropping `.md` files into the Google Bucket under `notes/` makes them instantly available.
 
-**API Endpoints:**
+**REST API Endpoints (shared):**
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/notes/list` | List all notes (sorted by modified time) |
 | `GET` | `/api/notes/read/{note_name}` | Read a note by name (no `.md` extension needed) |
 | `POST` | `/api/notes/write/{note_name}` | Create or overwrite a note |
+| `POST` | `/api/notes/save` | Save note with human-readable title (auto-slugified) |
+| `POST` | `/api/notes/sync` | Sync a cloud_notes payload (for direct browser sync) |
+| `POST` | `/api/notes/sync/batch` | Batch sync multiple notes in one request |
 | `DELETE` | `/api/notes/delete/{note_name}` | Delete a note |
 
 **Example — write a note:**
@@ -608,9 +614,144 @@ curl -X POST https://VPS_IP:8000/api/notes/write/project-ideas \
 curl https://VPS_IP:8000/api/notes/read/project-ideas
 ```
 
+**Example — save a note with a title:**
+
+```bash
+curl -X POST https://VPS_IP:8000/api/notes/save \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Project Ideas", "content": "- Build universal upload dashboard", "tags": "todo"}'
+```
+
 **Upload via admin dashboard:**
 
 Drag any `.md` file into `https://storage.noahcohn.com/admin` and it will be routed to `/api/notes/write/{filename}` automatically.
+
+---
+
+### 5. cloud_notes
+
+[github.com/ford442/cloud_notes](https://github.com/ford442/cloud_notes)
+
+`cloud_notes` is a browser-based note-taking app that syncs with the Storage Manager for centralized data persistence. It uses the shared `/api/notes/` REST API and includes support for direct browser-to-server sync without needing HMAC signatures.
+
+**Endpoints:**
+
+- **REST API:** Uses the same `/api/notes/*` endpoints as rain_edit (see above)
+- **Webhook:** `POST /webhook/notes` — for webhook-based sync with encrypted content support
+- **Direct Sync:** `POST /api/notes/sync` — for browser-based direct sync without signatures
+
+**Storage:** `files/notes/`
+
+Notes are stored as Markdown files with frontmatter metadata. The app can also sync via the webhook endpoint, which archives payloads in `notes/webhook/` for audit trails.
+
+**Webhook Integration:**
+
+The `cloud_notes` app can send notes to `POST /webhook/notes` for webhook-based sync. This endpoint:
+- Does NOT require HMAC signature verification (safe for browser-to-server)
+- Accepts encrypted content (marked with `ENC:v1:` prefix)
+- Archives JSON payloads in `notes/webhook/` for record-keeping
+- Saves extracted notes as Markdown files in `notes/`
+
+**Example — webhook sync from cloud_notes:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/notes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "cloud_notes",
+    "event": "note.updated",
+    "data": {
+      "id": "note-abc123",
+      "title": "My Cloud Note",
+      "content": "This is synced from cloud_notes",
+      "updatedAt": "2026-05-17T11:13:19Z"
+    }
+  }'
+```
+
+**Example — direct API sync:**
+
+```bash
+curl -X POST https://VPS_IP:8000/api/notes/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "cloud_notes",
+    "event": "note.updated",
+    "data": {
+      "id": "note-abc123",
+      "title": "Direct Sync Note",
+      "content": "Synced directly via REST API",
+      "updatedAt": "2026-05-17T11:13:19Z"
+    }
+  }'
+```
+
+**Example — batch sync multiple notes:**
+
+```bash
+curl -X POST https://VPS_IP:8000/api/notes/sync/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notes": [
+      {
+        "source": "cloud_notes",
+        "data": {
+          "id": "note-1",
+          "title": "Note One",
+          "content": "First note",
+          "updatedAt": "2026-05-17T11:13:19Z"
+        }
+      },
+      {
+        "source": "cloud_notes",
+        "data": {
+          "id": "note-2",
+          "title": "Note Two",
+          "content": "Second note",
+          "updatedAt": "2026-05-17T11:13:19Z"
+        }
+      }
+    ]
+  }'
+```
+
+**In the cloud_notes app config:**
+
+```js
+const STORAGE_URL = "https://storage.yourdomain.com";
+
+// For webhook-based sync
+await fetch(`${STORAGE_URL}/webhook/notes`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    source: "cloud_notes",
+    event: "note.updated",
+    data: {
+      id: noteId,
+      title: noteTitle,
+      content: noteContent,
+      updatedAt: new Date().toISOString()
+    }
+  })
+});
+
+// Or for direct API sync
+await fetch(`${STORAGE_URL}/api/notes/sync`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    source: "cloud_notes",
+    event: "note.updated",
+    data: {
+      id: noteId,
+      title: noteTitle,
+      content: noteContent,
+      updatedAt: new Date().toISOString()
+    }
+  })
+});
+```
 
 ---
 

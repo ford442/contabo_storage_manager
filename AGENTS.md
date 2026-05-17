@@ -54,6 +54,18 @@ The Python bridge serves a universal upload dashboard at `GET /admin`. It suppor
 
 The admin panel also supports remote SSH command execution via `POST /api/admin/run` (whitelisted commands only) and SSE log streaming via `GET /api/admin/logs/{task_id}`.
 
+### Officially Supported Apps
+
+The following applications have **first-class support** with dedicated endpoints and organized storage:
+
+1. **image_video_effects** — `/webhook/image-effects` — shader effects and outputs
+2. **flac_player** — `/api/songs/*`, `/api/music/*` — audio library streaming
+3. **web_sequencer** — `/webhook/sequencer`, `/api/songs/*`, `/api/patterns/*`, etc. — music composition
+4. **rain_edit** — `/api/notes/*` — markdown note-taking (REST API only)
+5. **cloud_notes** — `/api/notes/*`, `/webhook/notes` — cloud-based note sync with webhook support
+
+All apps share the same single FTP account and storage directory (`/home/ftpbridge/files`). The **Notes** API is shared between `rain_edit` and `cloud_notes`, allowing both apps to read/write notes interchangeably.
+
 ---
 
 ## Technology Stack
@@ -264,9 +276,12 @@ contabo_storage_manager/
 | `GET`  | `/api/notes/read/{name}` | Read a note |
 | `POST` | `/api/notes/write/{name}` | Write a note |
 | `POST` | `/api/notes/save` | Save note with title |
-| `POST` | `/api/notes/sync` | Sync from cloud_notes payload |
-| `POST` | `/api/notes/sync/batch` | Batch sync notes |
+| `POST` | `/api/notes/sync` | Sync from cloud_notes payload (direct browser sync) |
+| `POST` | `/api/notes/sync/batch` | Batch sync multiple notes |
 | `DELETE`| `/api/notes/delete/{name}` | Delete a note |
+
+**Webhook for cloud_notes:**
+| `POST` | `/webhook/notes` | cloud_notes webhook-based sync (no HMAC required) |
 
 #### Pachinball
 | `GET`  | `/maps` | List maps |
@@ -679,6 +694,8 @@ Files are organized under `FILES_DIR` (default `/home/ftpbridge/files`):
 - `presets_router.py` whitelists 5 preset directories and enforces `.milk` extension; paths are resolved via a static mapping dict to prevent traversal
 - Presets must be synced locally (via `scripts/sync_presets.py`) before the VPS can serve them. `/api/presets/random` returns a local URL when the file exists on disk, falling back to the external `glsl.1ink.us` URL only when the local copy is missing
 - `textures_router.py` whitelists 3 texture directories and enforces image extensions (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tga`)
+- `notes_router.py` provides shared `/api/notes/*` REST API for both rain_edit and cloud_notes with slugified filenames, path traversal protection, and support for syncing via payloads
+- `webhooks.py` includes `POST /webhook/notes` endpoint for cloud_notes webhook-based sync; does NOT require HMAC signatures (safe for browser-to-server), archives payloads in `notes/webhook/`, and supports encrypted content markers (`ENC:v1:`)
 - `cors.py` builds `CORSMiddleware` options dynamically: credentials are disabled when `*` is present in origins
 - `main.py` registers 13 routers in a specific order and installs both `CORSMiddleware` and a fallback `add_cors_headers` middleware
 
