@@ -1,0 +1,31 @@
+{
+  "tracks": [
+    {
+      "id": "neon-helix",
+      "name": "Neon Helix",
+      "title": "Neon Helix",
+      "artist": "Pachinball",
+      "url": "https://storage.noahcohn.com/pachinball/music/neon-helix.mp3",
+      "duration": 180,
+      "map_id": "neon-helix",
+      "tags": [
+        "electronic",
+        "synthwave"
+      ]
+    },
+    {
+      "id": "cyber-core",
+      "name": "Cyber Core",
+      "title": "Cyber Core",
+      "artist": "Pachinball",
+      "url": "https://storage.noahcohn.com/pachinball/music/cyber-core.mp3",
+      "duration": 200,
+      "map_id": "cyber-core",
+      "tags": [
+        "electronic",
+        "cyberpunk"
+      ]
+    }
+  ],
+  "version": "1.0"
+}
