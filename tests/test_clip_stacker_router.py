@@ -21,7 +21,6 @@ settings.files_dir = str(test_dir)
 
 from app.main import app  # noqa: E402
 
-
 @pytest.fixture
 def temp_files_dir(monkeypatch):
     """Fixture to provide a temporary files directory."""
@@ -30,7 +29,6 @@ def temp_files_dir(monkeypatch):
         # Create necessary subdirectories
         Path(tmpdir).mkdir(parents=True, exist_ok=True)
         yield tmpdir
-
 
 def test_clip_stacker_save_valid_project(temp_files_dir):
     """Test saving a valid clip-stacker project."""
@@ -51,8 +49,7 @@ def test_clip_stacker_save_valid_project(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 200
@@ -69,7 +66,6 @@ def test_clip_stacker_save_valid_project(temp_files_dir):
     assert saved_data["name"] == "my-project"
     assert saved_data["payload"]["clips"][0]["id"] == "clip1"
 
-
 def test_clip_stacker_save_with_special_characters_in_name(temp_files_dir):
     """Test that special characters in project name are sanitized."""
     client = TestClient(app)
@@ -81,15 +77,13 @@ def test_clip_stacker_save_with_special_characters_in_name(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 200
     data = response.json()
     # Verify special chars are replaced with underscores
     assert "_" in data["name"] or data["name"] == "myprojectnamewithspecial"
-
 
 def test_clip_stacker_save_prevents_path_traversal(temp_files_dir):
     """Test that path traversal attempts are blocked."""
@@ -103,14 +97,12 @@ def test_clip_stacker_save_prevents_path_traversal(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     # Should reject the traversal attempt
     assert response.status_code == 400
     assert "path traversal" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_save_missing_name(temp_files_dir):
     """Test that missing name field is rejected."""
@@ -122,13 +114,11 @@ def test_clip_stacker_save_missing_name(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 400
     assert "name" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_save_missing_payload(temp_files_dir):
     """Test that missing payload field is rejected."""
@@ -140,13 +130,11 @@ def test_clip_stacker_save_missing_payload(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 400
     assert "payload" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_save_invalid_json(temp_files_dir):
     """Test that invalid JSON is rejected."""
@@ -155,12 +143,11 @@ def test_clip_stacker_save_invalid_json(temp_files_dir):
     response = client.post(
         "/webhook/clip-stacker",
         content="not valid json {",
-        headers={"content-type": "application/json"},
+        
     )
     
     assert response.status_code == 422
     assert "invalid json" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_load_valid_project(temp_files_dir):
     """Test loading a valid clip-stacker project."""
@@ -193,7 +180,6 @@ def test_clip_stacker_load_valid_project(temp_files_dir):
     assert "payload" in data
     assert data["payload"]["clips"][0]["id"] == "clip1"
 
-
 def test_clip_stacker_load_missing_name(temp_files_dir):
     """Test that missing name parameter is rejected."""
     client = TestClient(app)
@@ -202,7 +188,6 @@ def test_clip_stacker_load_missing_name(temp_files_dir):
     
     assert response.status_code == 400
     assert "name" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_load_nonexistent_project(temp_files_dir):
     """Test that loading a nonexistent project returns 404."""
@@ -214,7 +199,6 @@ def test_clip_stacker_load_nonexistent_project(temp_files_dir):
     )
     
     assert response.status_code == 404
-
 
 def test_clip_stacker_load_prevents_path_traversal(temp_files_dir):
     """Test that path traversal attempts are blocked on load."""
@@ -233,7 +217,6 @@ def test_clip_stacker_load_prevents_path_traversal(temp_files_dir):
     # Should reject the traversal attempt
     assert response.status_code == 400
     assert "path traversal" in response.json()["detail"].lower()
-
 
 def test_clip_stacker_save_and_load_roundtrip(temp_files_dir):
     """Test save and load roundtrip."""
@@ -256,7 +239,7 @@ def test_clip_stacker_save_and_load_roundtrip(temp_files_dir):
     save_response = client.post(
         "/webhook/clip-stacker",
         content=json.dumps(original_project),
-        headers={"content-type": "application/json"},
+        
     )
     assert save_response.status_code == 200
     
@@ -272,7 +255,6 @@ def test_clip_stacker_save_and_load_roundtrip(temp_files_dir):
     assert loaded["payload"]["clips"][0]["id"] == "clip1"
     assert loaded["payload"]["transitions"][0]["type"] == "fade"
 
-
 def test_clip_stacker_save_empty_payload(temp_files_dir):
     """Test saving a project with empty payload."""
     client = TestClient(app)
@@ -284,8 +266,7 @@ def test_clip_stacker_save_empty_payload(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 200
@@ -299,7 +280,6 @@ def test_clip_stacker_save_empty_payload(temp_files_dir):
     )
     assert load_response.status_code == 200
     assert load_response.json()["payload"] == {}
-
 
 def test_clip_stacker_load_returns_only_payload(temp_files_dir):
     """Test that GET only returns the payload, not the entire saved file."""
@@ -331,7 +311,6 @@ def test_clip_stacker_load_returns_only_payload(temp_files_dir):
     assert set(data.keys()) == {"payload"}
     assert data["payload"] == {"clips": [], "transitions": []}
 
-
 def test_clip_stacker_save_with_dashes_and_dots(temp_files_dir):
     """Test that dashes and dots are preserved in project names."""
     client = TestClient(app)
@@ -343,8 +322,7 @@ def test_clip_stacker_save_with_dashes_and_dots(temp_files_dir):
     
     response = client.post(
         "/webhook/clip-stacker",
-        content=json.dumps(project_data),
-        headers={"content-type": "application/json"},
+        json=project_data,
     )
     
     assert response.status_code == 200

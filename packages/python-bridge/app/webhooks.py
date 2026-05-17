@@ -519,12 +519,14 @@ async def clip_stacker_save(request: Request):
     if payload is None:
         raise HTTPException(status_code=400, detail="Missing 'payload' field")
 
-    # Sanitize project name to prevent path traversal
+    # Reject path traversal attempts before sanitization
+    if ".." in project_name or "/" in project_name or "\\" in project_name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    # Sanitize project name (replace special chars with underscores)
     safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in project_name)
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
-    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
-        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
 
     # Ensure project directory exists
     projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
@@ -569,12 +571,14 @@ async def clip_stacker_load(request: Request, name: str = None):
     if not name:
         raise HTTPException(status_code=400, detail="Missing 'name' query parameter")
 
-    # Sanitize project name to prevent path traversal
+    # Reject path traversal attempts before sanitization
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    # Sanitize project name (replace special chars with underscores)
     safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
-    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
-        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
 
     # Load project file
     projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"

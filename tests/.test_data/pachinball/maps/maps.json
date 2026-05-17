@@ -1,0 +1,53 @@
+{
+  "maps": [
+    {
+      "id": "neon-helix",
+      "name": "Neon Helix",
+      "baseColor": "#00d9ff",
+      "accentColor": "#ffffff",
+      "glowIntensity": 1.0,
+      "backgroundPattern": "hex",
+      "animationSpeed": 0.5,
+      "musicTrackId": "neon-helix",
+      "shaderUrl": "https://storage.noahcohn.com/pachinball/shaders/neon-helix.glsl",
+      "mode": "fixed",
+      "worldLength": 200,
+      "scanlineIntensity": 0.25,
+      "pixelGridIntensity": 0.8,
+      "subpixelIntensity": 0.6
+    },
+    {
+      "id": "cyber-core",
+      "name": "Cyber Core",
+      "baseColor": "#8800ff",
+      "accentColor": "#00d9ff",
+      "glowIntensity": 1.1,
+      "backgroundPattern": "grid",
+      "animationSpeed": 0.6,
+      "musicTrackId": "cyber-core",
+      "shaderUrl": "https://storage.noahcohn.com/pachinball/shaders/cyber-core.glsl",
+      "mode": "fixed",
+      "worldLength": 200,
+      "scanlineIntensity": 0.3,
+      "pixelGridIntensity": 0.9,
+      "subpixelIntensity": 0.7
+    },
+    {
+      "id": "quantum-grid",
+      "name": "Quantum Grid",
+      "baseColor": "#00ff44",
+      "accentColor": "#ffffff",
+      "glowIntensity": 1.5,
+      "backgroundPattern": "dots",
+      "animationSpeed": 0.7,
+      "musicTrackId": "quantum-grid",
+      "shaderUrl": "https://storage.noahcohn.com/pachinball/shaders/quantum-grid.glsl",
+      "mode": "fixed",
+      "worldLength": 200,
+      "scanlineIntensity": 0.2,
+      "pixelGridIntensity": 0.85,
+      "subpixelIntensity": 0.65
+    }
+  ],
+  "version": "1.0"
+}
