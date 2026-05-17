@@ -486,6 +486,126 @@ updatedAt: {updated_at}
     )
 
 
+@webhook_router.post("/clip-stacker", response_model=dict)
+async def clip_stacker_save(request: Request):
+    """Save a clip-stacker project.
+    
+    Browser apps like clip_stacker cannot compute HMAC signatures without
+    exposing the webhook secret in client-side code. This endpoint is
+    intentionally open for direct browser-to-server sync.
+    
+    Expected JSON body:
+    {
+        "name": "my-project",
+        "payload": {
+            "clips": [...],
+            "transitions": [...]
+        }
+    }
+    """
+    body = await request.body()
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON")
+
+    # Extract required fields
+    project_name = data.get("name")
+    if not project_name:
+        raise HTTPException(status_code=400, detail="Missing 'name' field")
+    
+    payload = data.get("payload")
+    if payload is None:
+        raise HTTPException(status_code=400, detail="Missing 'payload' field")
+
+    # Reject path traversal attempts before sanitization
+    if ".." in project_name or "/" in project_name or "\\" in project_name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    # Sanitize project name (replace special chars with underscores)
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in project_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    # Ensure project directory exists
+    projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save project JSON
+    project_file = projects_dir / f"{safe_name}.json"
+    project_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # Upload to external storage
+    rel_path = f"clip-stacker/projects/{safe_name}.json"
+    remote_path = None
+    try:
+        remote_path = await ftp_client.upload(project_file, rel_path)
+    except Exception as exc:
+        logger.warning("FTP upload failed for clip-stacker project (non-fatal): %s", exc)
+
+    return {
+        "status": "success",
+        "message": f"Project saved: {safe_name}",
+        "name": safe_name,
+        "local_path": rel_path,
+        "remote_path": remote_path,
+    }
+
+
+@webhook_router.get("/clip-stacker", response_model=dict)
+async def clip_stacker_load(request: Request, name: str = None):
+    """Load a clip-stacker project by name.
+    
+    Query parameter:
+    - name: Project name (required)
+    
+    Response:
+    {
+        "payload": {
+            "clips": [...],
+            "transitions": [...]
+        }
+    }
+    """
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing 'name' query parameter")
+
+    # Reject path traversal attempts before sanitization
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    # Sanitize project name (replace special chars with underscores)
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    # Load project file
+    projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
+    project_file = projects_dir / f"{safe_name}.json"
+
+    # Ensure the resolved path is within projects_dir (prevent traversal)
+    try:
+        project_file_resolved = project_file.resolve()
+        projects_dir_resolved = projects_dir.resolve()
+        if not str(project_file_resolved).startswith(str(projects_dir_resolved)):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not project_file.exists():
+        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+
+    try:
+        project_data = json.loads(project_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.error("Failed to load project %s: %s", safe_name, exc)
+        raise HTTPException(status_code=500, detail="Failed to load project")
+
+    # Return just the payload as per the spec
+    return {"payload": project_data.get("payload", {})}
+
+
 # ====================== Static File Serving ======================
 @files_router.head("/{file_path:path}", summary="HEAD for stored files")
 async def head_file(file_path: str):
