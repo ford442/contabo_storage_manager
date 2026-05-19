@@ -1,0 +1,39 @@
+# Models directory — WebLLM-compatible serving
+# Brotli if mod_brotli is available (DreamHost may support it), gzip fallback
+
+<IfModule mod_brotli.c>
+    AddOutputFilterByType BROTLI_COMPRESS application/json application/javascript text/plain
+</IfModule>
+
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE application/json application/javascript text/plain
+</IfModule>
+
+# Vary so caches know to store compressed and uncompressed separately
+Header append Vary Accept-Encoding
+
+# Range requests — required for WebLLM resumable downloads
+Header always set Accept-Ranges "bytes"
+
+# CORS — browser needs this to fetch from a different origin
+Header always set Access-Control-Allow-Origin "*"
+Header always set Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+Header always set Access-Control-Allow-Headers "Range, Accept-Ranges, Content-Range, Cache-Control"
+Header always set Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges"
+
+# Cache — model weights are immutable once uploaded
+<FilesMatch "\.(bin|wasm|safetensors|onnx|mlmodel)$">
+    Header always set Cache-Control "public, max-age=31536000, immutable"
+</FilesMatch>
+
+# JSON configs change rarely
+<FilesMatch "\.json$">
+    Header always set Cache-Control "public, max-age=86400"
+</FilesMatch>
+
+# Preflight
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^ - [R=204,L]
+</IfModule>
