@@ -60,9 +60,7 @@ services:
   # via HTTPS once you put a TLS-terminating proxy in front of port 8080.
   # Built with Brotli compression module for efficient asset delivery.
   nginx-files:
-    build:
-      context: .
-      dockerfile: Dockerfile.nginx
+    image: nginx:alpine
     container_name: ftpbridge-nginx
     restart: unless-stopped
     ports:

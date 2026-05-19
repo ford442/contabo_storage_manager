@@ -262,14 +262,20 @@ async def add_cors_headers(request: Request, call_next):
 
     allowed = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     regex = settings.cors_origin_regex.strip() or None
+
+    # Handle wildcard (*) — allow any origin, but never send credentials with it
+    if "*" in allowed:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Vary"] = "Origin"
+        return response
+
     is_allowed = origin in allowed
-    if not is_allowed and regex and "*" not in allowed:
+    if not is_allowed and regex:
         is_allowed = bool(_re.match(regex, origin))
 
     if is_allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
-        if "*" not in allowed:
-            response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
     return response
 
