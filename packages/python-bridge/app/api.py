@@ -99,6 +99,7 @@ class ShaderListResponse(BaseModel):
     total: int
     page: int = 1
     per_page: int = 100
+    total_pages: int = 1
 
 
 class MapConfig(BaseModel):
@@ -170,9 +171,15 @@ async def list_shaders(
     per_page: int = Query(100, ge=1, le=1000),
     tag: Optional[str] = None,
     rating: Optional[int] = None,
-    sort_by: str = Query("name", pattern="^(name|date|rating)$")
+    sort_by: str = Query("name", pattern="^(name|date|rating)$"),
+    all: bool = Query(False, description="Return every shader in one response, ignoring pagination."),
 ):
-    """List all shaders with pagination, filtering, and sorting."""
+    """List all shaders with pagination, filtering, and sorting.
+
+    Pass ``all=true`` to receive the complete set in a single response, which
+    avoids clients having to loop over pages (the previous behavior left
+    callers fetching only the first 100 unless they paginated manually).
+    """
     shaders_dir = _get_shaders_dir()
     shaders = []
     
@@ -199,14 +206,26 @@ async def list_shaders(
         shaders.sort(key=lambda s: s.get("name", "").lower())
     
     total = len(shaders)
+
+    if all:
+        return ShaderListResponse(
+            shaders=shaders,
+            total=total,
+            page=1,
+            per_page=total or 1,
+            total_pages=1,
+        )
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
     start = (page - 1) * per_page
     end = start + per_page
-    
+
     return ShaderListResponse(
         shaders=shaders[start:end],
         total=total,
         page=page,
-        per_page=per_page
+        per_page=per_page,
+        total_pages=total_pages,
     )
 
 
