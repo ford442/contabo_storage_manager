@@ -181,13 +181,15 @@ def test_clip_stacker_load_valid_project(temp_files_dir):
     assert data["payload"]["clips"][0]["id"] == "clip1"
 
 def test_clip_stacker_load_missing_name(temp_files_dir):
-    """Test that missing name parameter is rejected."""
+    """Test that missing name parameter returns a list of projects."""
     client = TestClient(app)
-    
+
     response = client.get("/webhook/clip-stacker")
-    
-    assert response.status_code == 400
-    assert "name" in response.json()["detail"].lower()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "projects" in data
+    assert isinstance(data["projects"], list)
 
 def test_clip_stacker_load_nonexistent_project(temp_files_dir):
     """Test that loading a nonexistent project returns 404."""
@@ -199,6 +201,28 @@ def test_clip_stacker_load_nonexistent_project(temp_files_dir):
     )
     
     assert response.status_code == 404
+
+def test_clip_stacker_list_projects(temp_files_dir):
+    """Test listing saved projects."""
+    client = TestClient(app)
+
+    # Save two projects
+    for project_name in ["alpha-project", "beta-project"]:
+        client.post(
+            "/webhook/clip-stacker",
+            json={"name": project_name, "payload": {"clips": [], "transitions": []}},
+        )
+
+    response = client.get("/webhook/clip-stacker")
+    assert response.status_code == 200
+    data = response.json()
+    assert "projects" in data
+    names = [p["name"] for p in data["projects"]]
+    assert "alpha-project" in names
+    assert "beta-project" in names
+    # Should be sorted by modified time descending (newest first)
+    assert data["projects"][0]["name"] == "beta-project"
+
 
 def test_clip_stacker_load_prevents_path_traversal(temp_files_dir):
     """Test that path traversal attempts are blocked on load."""
@@ -332,3 +356,50 @@ def test_clip_stacker_save_with_dashes_and_dots(temp_files_dir):
     # Verify file was created with correct name
     project_file = Path(temp_files_dir) / "clip-stacker" / "projects" / "my-project.v1.0.json"
     assert project_file.exists()
+
+
+
+def test_clip_stacker_delete_project(temp_files_dir):
+    """Test deleting a clip-stacker project."""
+    client = TestClient(app)
+
+    # Save a project
+    client.post(
+        "/webhook/clip-stacker",
+        json={"name": "delete-me", "payload": {"clips": [], "transitions": []}},
+    )
+
+    # Verify it exists
+    assert (Path(temp_files_dir) / "clip-stacker" / "projects" / "delete-me.json").exists()
+
+    response = client.delete("/webhook/clip-stacker", params={"name": "delete-me"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+
+    # Verify it's gone
+    assert not (Path(temp_files_dir) / "clip-stacker" / "projects" / "delete-me.json").exists()
+
+
+def test_clip_stacker_media_upload(temp_files_dir):
+    """Test uploading a media file for clip-stacker."""
+    client = TestClient(app)
+
+    from io import BytesIO
+
+    fake_file = BytesIO(b"fake video data")
+    response = client.post(
+        "/webhook/clip-stacker/media",
+        files={"file": ("test-video.mp4", fake_file, "video/mp4")},
+        data={"name": "test-video.mp4"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "url" in data
+    assert "clip-stacker/media/" in data["url"]
+    assert data["size_bytes"] == len(b"fake video data")
+
+    # Verify file was written
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    assert any(media_dir.glob("*.mp4"))

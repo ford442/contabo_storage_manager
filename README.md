@@ -431,6 +431,10 @@ All share the **same single FTP account** configured in `.env`.
     ├── midi/                        # MIDI files (.mid)
     ├── samples/                     # Audio samples / SoundFonts
     └── recordings/                  # Exported WAV / MP3 recordings
+
+└── clip-stacker/
+    ├── projects/                    # Clip-stacker project JSON files
+    └── media/                       # Uploaded media files (MP4, WAV, MP3)
 ```
 
 ---
@@ -767,6 +771,77 @@ await fetch(`${STORAGE_URL}/api/notes/sync`, {
     }
   })
 });
+```
+
+---
+
+### 6. clip_stacker
+
+[github.com/ford442/clip_stacker](https://github.com/ford442/clip_stacker)
+
+`clip_stacker` is a browser-based video/audio clip editor that merges clips into one MP4 via FFmpeg WebAssembly. Projects are stored as JSON metadata, and media files can be uploaded for remote reference.
+
+**Endpoints:**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/webhook/clip-stacker` | Save project JSON (body: `{name, payload}`) |
+| `GET` | `/webhook/clip-stacker?name=...` | Load project JSON |
+| `GET` | `/webhook/clip-stacker` | List all saved projects |
+| `DELETE` | `/webhook/clip-stacker?name=...` | Delete a project |
+| `POST` | `/webhook/clip-stacker/media` | Upload media file (`multipart/form-data`) |
+
+**Storage:** `files/clip-stacker/`
+
+No HMAC signature is required — these endpoints are designed for direct browser-to-server sync.
+
+**Example — save a project:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/clip-stacker \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-edit",
+    "payload": {
+      "clips": [{"id": "c1", "fileName": "intro.mp4", "trimStart": 0, "trimEnd": 5}],
+      "transitions": []
+    }
+  }'
+```
+
+**Example — list projects:**
+
+```bash
+curl https://VPS_IP:8000/webhook/clip-stacker
+```
+
+**Example — upload media:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/clip-stacker/media \
+  -F "file=@intro.mp4" \
+  -F "name=intro.mp4"
+```
+
+**In the clip_stacker app config:**
+
+```js
+const STORAGE_URL = "https://storage.yourdomain.com";
+
+// Save project
+await fetch(`${STORAGE_URL}/webhook/clip-stacker`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "my-edit", payload: projectObject })
+});
+
+// Load project
+const res = await fetch(`${STORAGE_URL}/webhook/clip-stacker?name=my-edit`);
+const { payload } = await res.json();
+
+// List projects
+const listRes = await fetch(`${STORAGE_URL}/webhook/clip-stacker`);
+const { projects } = await listRes.json();
 ```
 
 ---

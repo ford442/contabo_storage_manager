@@ -656,21 +656,31 @@ async def clip_stacker_save(request: Request):
 
 @webhook_router.get("/clip-stacker", response_model=dict)
 async def clip_stacker_load(request: Request, name: str = None):
-    """Load a clip-stacker project by name.
-    
+    """Load a clip-stacker project by name, or list all projects if no name is provided.
+
     Query parameter:
-    - name: Project name (required)
-    
-    Response:
-    {
-        "payload": {
-            "clips": [...],
-            "transitions": [...]
-        }
-    }
+    - name: Project name (optional). When omitted, returns a list of all saved projects.
+
+    Responses:
+    - With name: { "payload": { "clips": [...], "transitions": [...] } }
+    - Without name: { "projects": [{ "name": "...", "modified": <timestamp> }, ...] }
     """
+    projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+
     if not name:
-        raise HTTPException(status_code=400, detail="Missing 'name' query parameter")
+        # List all projects
+        projects = []
+        for f in sorted(projects_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                projects.append({
+                    "name": data.get("name", f.stem),
+                    "modified": f.stat().st_mtime,
+                })
+            except Exception:
+                pass
+        return {"projects": projects}
 
     # Reject path traversal attempts before sanitization
     if ".." in name or "/" in name or "\\" in name:
@@ -682,7 +692,6 @@ async def clip_stacker_load(request: Request, name: str = None):
         raise HTTPException(status_code=400, detail="Invalid project name")
 
     # Load project file
-    projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
     project_file = projects_dir / f"{safe_name}.json"
 
     # Ensure the resolved path is within projects_dir (prevent traversal)
@@ -705,6 +714,67 @@ async def clip_stacker_load(request: Request, name: str = None):
 
     # Return just the payload as per the spec
     return {"payload": project_data.get("payload", {})}
+
+
+@webhook_router.delete("/clip-stacker", response_model=dict)
+async def clip_stacker_delete(request: Request, name: str = None):
+    """Delete a clip-stacker project by name.
+
+    Query parameter:
+    - name: Project name (required)
+    """
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing 'name' query parameter")
+
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    projects_dir = Path(settings.files_dir) / "clip-stacker" / "projects"
+    project_file = projects_dir / f"{safe_name}.json"
+
+    try:
+        project_file_resolved = project_file.resolve()
+        projects_dir_resolved = projects_dir.resolve()
+        if not str(project_file_resolved).startswith(str(projects_dir_resolved)):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not project_file.exists():
+        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+
+    project_file.unlink()
+    return {"status": "success", "message": f"Project deleted: {safe_name}"}
+
+
+@webhook_router.post("/clip-stacker/media", response_model=dict)
+async def clip_stacker_media_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+):
+    """Upload a media file for clip-stacker.
+
+    Form fields:
+    - file: Binary media file (required)
+    - name: Desired filename hint (required)
+
+    Response:
+    {
+        "url": "https://storage.example.com/files/clip-stacker/media/..."
+    }
+    """
+    rel_dir = "clip-stacker/media"
+    result = await _save_upload(file, rel_dir)
+
+    base_url = str(settings.static_base_url).rstrip("/")
+    public_url = f"{base_url}/{result['local_path']}"
+
+    return {"url": public_url, "local_path": result["local_path"], "size_bytes": result.get("size_bytes", 0)}
 
 
 # ====================== Static File Serving ======================
