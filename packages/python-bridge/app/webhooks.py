@@ -2,7 +2,10 @@ import hashlib
 import hmac
 import json
 import logging
+import shutil
+import subprocess
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -19,6 +22,8 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
 logger = logging.getLogger(__name__)
+MAX_SHADER_LIST_FILES = 50
+MAX_SHADER_LIST_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 webhook_router = APIRouter(prefix="/webhook", tags=["webhooks"])
 files_router = APIRouter(prefix="/files", tags=["files"])
@@ -144,6 +149,102 @@ async def image_effects_webhook(
         message=f"Saved to {rel_dir}",
         files=[rel_path],
         remote_files=[remote_path] if remote_path else None,
+    )
+
+
+@webhook_router.post("/image-effects/generate-shader-lists", response_model=FileUploadResponse)
+async def generate_shader_lists_webhook(
+    x_webhook_token: Optional[str] = Header(None, alias="X-Webhook-Token"),
+):
+    expected_token = settings.shader_generation_token
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="Shader generation token is not configured")
+    if not x_webhook_token or not hmac.compare_digest(x_webhook_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+
+    repo_dir = Path(settings.image_effects_repo_dir).expanduser().resolve()
+    script_path = (repo_dir / "scripts" / "generate_shader_lists.js").resolve()
+    shader_lists_dir = (repo_dir / settings.image_effects_shader_lists_dir).resolve()
+
+    if not repo_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Repo directory not found: {repo_dir}")
+    if not (repo_dir / ".git").exists():
+        raise HTTPException(status_code=400, detail=f"Not a git repository: {repo_dir}")
+    if not script_path.is_relative_to(repo_dir):
+        raise HTTPException(status_code=400, detail=f"Script path escapes repo directory: {script_path}")
+    if not shader_lists_dir.is_relative_to(repo_dir):
+        raise HTTPException(status_code=400, detail=f"Shader list path escapes repo directory: {shader_lists_dir}")
+    if not script_path.exists():
+        raise HTTPException(status_code=404, detail=f"Shader list script not found: {script_path}")
+
+    pull_result = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo_dir), "pull", "--ff-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pull_result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"git pull failed: {pull_result.stderr.strip() or pull_result.stdout.strip() or 'unknown error'}",
+        )
+
+    generate_result = await asyncio.to_thread(
+        subprocess.run,
+        ["node", str(script_path)],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if generate_result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "shader list generation failed: "
+                f"{generate_result.stderr.strip() or generate_result.stdout.strip() or 'unknown error'}"
+            ),
+        )
+
+    if not shader_lists_dir.exists():
+        raise HTTPException(status_code=500, detail=f"Shader list output directory not found: {shader_lists_dir}")
+
+    generated_files = sorted(list(shader_lists_dir.glob("*.json")))
+    if not generated_files:
+        raise HTTPException(status_code=500, detail="No shader list JSON files were generated")
+    if len(generated_files) > MAX_SHADER_LIST_FILES:
+        raise HTTPException(status_code=500, detail=f"Too many shader list files (max {MAX_SHADER_LIST_FILES})")
+
+    rel_dir = "image-effects/shader-lists"
+    output_dir = Path(settings.files_dir) / rel_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = []
+    remote_files = []
+    for generated in generated_files:
+        size = generated.stat().st_size
+        if size > MAX_SHADER_LIST_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Shader list file too large: {generated.name} ({size} bytes)",
+            )
+        destination = output_dir / generated.name
+        try:
+            await asyncio.to_thread(shutil.copy2, generated, destination)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to copy {generated.name}: {exc}") from exc
+        rel_path = f"{rel_dir}/{generated.name}"
+        files.append(rel_path)
+        remote_path = await ftp_client.upload(destination, rel_path)
+        if remote_path:
+            remote_files.append(remote_path)
+
+    return FileUploadResponse(
+        status="success",
+        message=f"Generated and uploaded {len(files)} shader list file(s)",
+        files=files,
+        remote_files=remote_files if remote_files else None,
     )
 
 
