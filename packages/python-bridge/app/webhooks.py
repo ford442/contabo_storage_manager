@@ -22,6 +22,8 @@ from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 
 logger = logging.getLogger(__name__)
+MAX_SHADER_LIST_FILES = 50
+MAX_SHADER_LIST_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 webhook_router = APIRouter(prefix="/webhook", tags=["webhooks"])
 files_router = APIRouter(prefix="/files", tags=["files"])
@@ -207,6 +209,8 @@ async def generate_shader_lists_webhook(
     generated_files = sorted(shader_lists_dir.glob("*.json"))
     if not generated_files:
         raise HTTPException(status_code=500, detail="No shader list JSON files were generated")
+    if len(generated_files) > MAX_SHADER_LIST_FILES:
+        raise HTTPException(status_code=500, detail=f"Too many shader list files (max {MAX_SHADER_LIST_FILES})")
 
     rel_dir = "image-effects/shader-lists"
     output_dir = Path(settings.files_dir) / rel_dir
@@ -215,6 +219,12 @@ async def generate_shader_lists_webhook(
     files = []
     remote_files = []
     for generated in generated_files:
+        size = generated.stat().st_size
+        if size > MAX_SHADER_LIST_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Shader list file too large: {generated.name} ({size} bytes)",
+            )
         destination = output_dir / generated.name
         try:
             await asyncio.to_thread(shutil.copy2, generated, destination)

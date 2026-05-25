@@ -70,6 +70,13 @@ def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(webhooks_module.subprocess, "run", fake_run)
+    to_thread_calls = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(webhooks_module.asyncio, "to_thread", fake_to_thread)
 
     uploaded = []
 
@@ -106,6 +113,8 @@ def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
         "image-effects/shader-lists/all.json",
         "image-effects/shader-lists/featured.json",
     ]
+    assert to_thread_calls.count("fake_run") == 2
+    assert to_thread_calls.count("copy2") == 2
 
 
 def test_generate_shader_lists_returns_error_when_git_pull_fails(monkeypatch, tmp_path):
