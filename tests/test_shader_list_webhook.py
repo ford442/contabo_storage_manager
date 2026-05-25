@@ -32,6 +32,19 @@ def test_generate_shader_lists_requires_token(monkeypatch):
     assert response.json()["detail"] == "Invalid webhook token"
 
 
+def test_generate_shader_lists_requires_server_configuration(monkeypatch):
+    monkeypatch.setattr(webhooks_module.settings, "shader_generation_token", None)
+
+    client = _build_client()
+    response = client.post(
+        "/webhook/image-effects/generate-shader-lists",
+        headers={"X-Webhook-Token": "anything"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Shader generation token is not configured"
+
+
 def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
     repo_dir = tmp_path / "image_video_effects"
     script_path = repo_dir / "scripts" / "generate_shader_lists.js"

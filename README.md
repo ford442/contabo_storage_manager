@@ -326,7 +326,7 @@ Copy `.env.example` to `.env` and adjust the values.
 | `FTP_TLS` | `false` | Enable FTPS (`true`/`false`) |
 | `WEBHOOK_SECRET` | *(empty)* | HMAC secret – leave empty to disable verification |
 | `WEBHOOK_HMAC_ALGO` | `sha256` | HMAC algorithm (`sha256` or `sha1`) |
-| `SHADER_GENERATION_TOKEN` | *(empty)* | Token for `POST /webhook/image-effects/generate-shader-lists` (falls back to `WEBHOOK_SECRET` when unset) |
+| `SHADER_GENERATION_TOKEN` | *(empty)* | Required token for `POST /webhook/image-effects/generate-shader-lists` |
 | `IMAGE_EFFECTS_REPO_DIR` | `/root/image_video_effects` | Local checkout path used for shader list generation |
 | `IMAGE_EFFECTS_SHADER_LISTS_DIR` | `shader-lists` | Relative output folder containing generated shader list JSON files |
 | `PYTHON_PORT` | `8000` | Port for FastAPI service |

@@ -5,6 +5,7 @@ import logging
 import shutil
 import subprocess
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -153,7 +154,7 @@ async def image_effects_webhook(
 async def generate_shader_lists_webhook(
     x_webhook_token: Optional[str] = Header(None, alias="X-Webhook-Token"),
 ):
-    expected_token = settings.shader_generation_token or settings.webhook_secret
+    expected_token = settings.shader_generation_token
     if not expected_token:
         raise HTTPException(status_code=503, detail="Shader generation token is not configured")
     if not x_webhook_token or not hmac.compare_digest(x_webhook_token, expected_token):
@@ -168,7 +169,8 @@ async def generate_shader_lists_webhook(
     if not script_path.exists():
         raise HTTPException(status_code=404, detail=f"Shader list script not found: {script_path}")
 
-    pull_result = subprocess.run(
+    pull_result = await asyncio.to_thread(
+        subprocess.run,
         ["git", "-C", str(repo_dir), "pull", "--ff-only"],
         capture_output=True,
         text=True,
@@ -180,7 +182,8 @@ async def generate_shader_lists_webhook(
             detail=f"git pull failed: {pull_result.stderr.strip() or pull_result.stdout.strip() or 'unknown error'}",
         )
 
-    generate_result = subprocess.run(
+    generate_result = await asyncio.to_thread(
+        subprocess.run,
         ["node", str(script_path)],
         cwd=str(repo_dir),
         capture_output=True,
@@ -211,7 +214,7 @@ async def generate_shader_lists_webhook(
     remote_files = []
     for generated in generated_files:
         destination = output_dir / generated.name
-        shutil.copy2(generated, destination)
+        await asyncio.to_thread(shutil.copy2, generated, destination)
         rel_path = f"{rel_dir}/{generated.name}"
         files.append(rel_path)
         remote_path = await ftp_client.upload(destination, rel_path)
