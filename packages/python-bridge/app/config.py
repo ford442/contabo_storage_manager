@@ -20,6 +20,9 @@ class Settings(BaseSettings):
 
     # Webhook security
     webhook_secret: Optional[str] = None
+    shader_generation_token: Optional[str] = None
+    image_effects_repo_dir: str = "/root/image_video_effects"
+    image_effects_shader_lists_dir: str = "shader-lists"
 
     # Static file serving
     static_base_url: str = "https://storage.noahcohn.com/files"

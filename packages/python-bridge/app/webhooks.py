@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import json
 import logging
+import shutil
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +146,83 @@ async def image_effects_webhook(
         message=f"Saved to {rel_dir}",
         files=[rel_path],
         remote_files=[remote_path] if remote_path else None,
+    )
+
+
+@webhook_router.post("/image-effects/generate-shader-lists", response_model=FileUploadResponse)
+async def generate_shader_lists_webhook(
+    x_webhook_token: Optional[str] = Header(None, alias="X-Webhook-Token"),
+):
+    expected_token = settings.shader_generation_token or settings.webhook_secret
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="Shader generation token is not configured")
+    if not x_webhook_token or not hmac.compare_digest(x_webhook_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+
+    repo_dir = Path(settings.image_effects_repo_dir).expanduser()
+    script_path = repo_dir / "scripts" / "generate_shader_lists.js"
+    shader_lists_dir = repo_dir / settings.image_effects_shader_lists_dir
+
+    if not repo_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Repo directory not found: {repo_dir}")
+    if not script_path.exists():
+        raise HTTPException(status_code=404, detail=f"Shader list script not found: {script_path}")
+
+    pull_result = subprocess.run(
+        ["git", "-C", str(repo_dir), "pull", "--ff-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pull_result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"git pull failed: {pull_result.stderr.strip() or pull_result.stdout.strip() or 'unknown error'}",
+        )
+
+    generate_result = subprocess.run(
+        ["node", str(script_path)],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if generate_result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "shader list generation failed: "
+                f"{generate_result.stderr.strip() or generate_result.stdout.strip() or 'unknown error'}"
+            ),
+        )
+
+    if not shader_lists_dir.exists():
+        raise HTTPException(status_code=500, detail=f"Shader list output directory not found: {shader_lists_dir}")
+
+    generated_files = sorted(shader_lists_dir.glob("*.json"))
+    if not generated_files:
+        raise HTTPException(status_code=500, detail="No shader list JSON files were generated")
+
+    rel_dir = "image-effects/shader-lists"
+    output_dir = Path(settings.files_dir) / rel_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = []
+    remote_files = []
+    for generated in generated_files:
+        destination = output_dir / generated.name
+        shutil.copy2(generated, destination)
+        rel_path = f"{rel_dir}/{generated.name}"
+        files.append(rel_path)
+        remote_path = await ftp_client.upload(destination, rel_path)
+        if remote_path:
+            remote_files.append(remote_path)
+
+    return FileUploadResponse(
+        status="success",
+        message=f"Generated and uploaded {len(files)} shader list file(s)",
+        files=files,
+        remote_files=remote_files if remote_files else None,
     )
 
 

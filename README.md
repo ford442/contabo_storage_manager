@@ -326,6 +326,9 @@ Copy `.env.example` to `.env` and adjust the values.
 | `FTP_TLS` | `false` | Enable FTPS (`true`/`false`) |
 | `WEBHOOK_SECRET` | *(empty)* | HMAC secret – leave empty to disable verification |
 | `WEBHOOK_HMAC_ALGO` | `sha256` | HMAC algorithm (`sha256` or `sha1`) |
+| `SHADER_GENERATION_TOKEN` | *(empty)* | Token for `POST /webhook/image-effects/generate-shader-lists` (falls back to `WEBHOOK_SECRET` when unset) |
+| `IMAGE_EFFECTS_REPO_DIR` | `/root/image_video_effects` | Local checkout path used for shader list generation |
+| `IMAGE_EFFECTS_SHADER_LISTS_DIR` | `shader-lists` | Relative output folder containing generated shader list JSON files |
 | `PYTHON_PORT` | `8000` | Port for FastAPI service |
 | `NODE_PORT` | `3000` | Port for Express service |
 | `CORS_ORIGINS` | `*` | Comma-separated CORS origins, or `*` for all |
@@ -482,6 +485,19 @@ await fetch(`${STORAGE_URL}/webhook/image-effects`, {
   body: JSON.stringify({ action: "save_shader", name: shaderName, data: shaderObj }),
 });
 ```
+
+**Generate and upload shader lists from VPS:**
+
+```bash
+curl -X POST https://VPS_IP:8000/webhook/image-effects/generate-shader-lists \
+  -H "X-Webhook-Token: YOUR_SHADER_GENERATION_TOKEN"
+```
+
+This endpoint will:
+- run `git -C IMAGE_EFFECTS_REPO_DIR pull --ff-only`
+- run `node scripts/generate_shader_lists.js`
+- copy `IMAGE_EFFECTS_SHADER_LISTS_DIR/*.json` to `image-effects/shader-lists/` in storage
+- upload copied files to external FTP/SFTP when configured
 
 ---
 
