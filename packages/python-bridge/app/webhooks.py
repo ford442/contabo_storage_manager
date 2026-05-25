@@ -206,7 +206,7 @@ async def generate_shader_lists_webhook(
     if not shader_lists_dir.exists():
         raise HTTPException(status_code=500, detail=f"Shader list output directory not found: {shader_lists_dir}")
 
-    generated_files = sorted(shader_lists_dir.glob("*.json"))
+    generated_files = sorted(list(shader_lists_dir.glob("*.json")))
     if not generated_files:
         raise HTTPException(status_code=500, detail="No shader list JSON files were generated")
     if len(generated_files) > MAX_SHADER_LIST_FILES:
