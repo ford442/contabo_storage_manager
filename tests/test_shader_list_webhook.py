@@ -52,6 +52,7 @@ def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
     storage_dir = tmp_path / "storage"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text("// fake script", encoding="utf-8")
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
     shader_lists_dir.mkdir(parents=True, exist_ok=True)
     (shader_lists_dir / "all.json").write_text('{"ok":1}', encoding="utf-8")
     (shader_lists_dir / "featured.json").write_text('{"ok":2}', encoding="utf-8")
@@ -105,3 +106,60 @@ def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
         "image-effects/shader-lists/all.json",
         "image-effects/shader-lists/featured.json",
     ]
+
+
+def test_generate_shader_lists_returns_error_when_git_pull_fails(monkeypatch, tmp_path):
+    repo_dir = tmp_path / "image_video_effects"
+    script_path = repo_dir / "scripts" / "generate_shader_lists.js"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("// fake script", encoding="utf-8")
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(webhooks_module.settings, "shader_generation_token", "top-secret")
+    monkeypatch.setattr(webhooks_module.settings, "image_effects_repo_dir", str(repo_dir))
+    monkeypatch.setattr(webhooks_module.settings, "image_effects_shader_lists_dir", "shader-lists")
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] == ["git", "-C", str(repo_dir), "pull"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="pull failed")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(webhooks_module.subprocess, "run", fake_run)
+
+    client = _build_client()
+    response = client.post(
+        "/webhook/image-effects/generate-shader-lists",
+        headers={"X-Webhook-Token": "top-secret"},
+    )
+
+    assert response.status_code == 500
+    assert "git pull failed" in response.json()["detail"]
+
+
+def test_generate_shader_lists_returns_error_when_script_fails(monkeypatch, tmp_path):
+    repo_dir = tmp_path / "image_video_effects"
+    script_path = repo_dir / "scripts" / "generate_shader_lists.js"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("// fake script", encoding="utf-8")
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "shader-lists").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(webhooks_module.settings, "shader_generation_token", "top-secret")
+    monkeypatch.setattr(webhooks_module.settings, "image_effects_repo_dir", str(repo_dir))
+    monkeypatch.setattr(webhooks_module.settings, "image_effects_shader_lists_dir", "shader-lists")
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "node":
+            return SimpleNamespace(returncode=1, stdout="", stderr="script failed")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(webhooks_module.subprocess, "run", fake_run)
+
+    client = _build_client()
+    response = client.post(
+        "/webhook/image-effects/generate-shader-lists",
+        headers={"X-Webhook-Token": "top-secret"},
+    )
+
+    assert response.status_code == 500
+    assert "shader list generation failed" in response.json()["detail"]

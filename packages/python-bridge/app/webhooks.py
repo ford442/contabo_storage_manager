@@ -166,6 +166,8 @@ async def generate_shader_lists_webhook(
 
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail=f"Repo directory not found: {repo_dir}")
+    if not (repo_dir / ".git").exists():
+        raise HTTPException(status_code=400, detail=f"Not a git repository: {repo_dir}")
     if not script_path.exists():
         raise HTTPException(status_code=404, detail=f"Shader list script not found: {script_path}")
 
@@ -214,7 +216,10 @@ async def generate_shader_lists_webhook(
     remote_files = []
     for generated in generated_files:
         destination = output_dir / generated.name
-        await asyncio.to_thread(shutil.copy2, generated, destination)
+        try:
+            await asyncio.to_thread(shutil.copy2, generated, destination)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to copy {generated.name}: {exc}") from exc
         rel_path = f"{rel_dir}/{generated.name}"
         files.append(rel_path)
         remote_path = await ftp_client.upload(destination, rel_path)
