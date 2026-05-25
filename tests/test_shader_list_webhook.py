@@ -104,7 +104,7 @@ def test_generate_shader_lists_runs_and_uploads(monkeypatch, tmp_path):
         "/remote/image-effects/shader-lists/featured.json",
     ]
 
-    assert commands[0][0] == ["git", "-C", str(repo_dir), "pull", "--ff-only"]
+    assert commands[0][0] == ["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo_dir), "pull", "--ff-only"]
     assert commands[1][0] == ["node", str(script_path)]
 
     assert (storage_dir / "image-effects" / "shader-lists" / "all.json").exists()
@@ -129,7 +129,7 @@ def test_generate_shader_lists_returns_error_when_git_pull_fails(monkeypatch, tm
     monkeypatch.setattr(webhooks_module.settings, "image_effects_shader_lists_dir", "shader-lists")
 
     def fake_run(cmd, **kwargs):
-        if cmd[:4] == ["git", "-C", str(repo_dir), "pull"]:
+        if cmd[0] == "git" and "pull" in cmd:
             return SimpleNamespace(returncode=1, stdout="", stderr="pull failed")
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 

@@ -162,20 +162,24 @@ async def generate_shader_lists_webhook(
     if not x_webhook_token or not hmac.compare_digest(x_webhook_token, expected_token):
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
-    repo_dir = Path(settings.image_effects_repo_dir).expanduser()
-    script_path = repo_dir / "scripts" / "generate_shader_lists.js"
-    shader_lists_dir = repo_dir / settings.image_effects_shader_lists_dir
+    repo_dir = Path(settings.image_effects_repo_dir).expanduser().resolve()
+    script_path = (repo_dir / "scripts" / "generate_shader_lists.js").resolve()
+    shader_lists_dir = (repo_dir / settings.image_effects_shader_lists_dir).resolve()
 
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail=f"Repo directory not found: {repo_dir}")
     if not (repo_dir / ".git").exists():
         raise HTTPException(status_code=400, detail=f"Not a git repository: {repo_dir}")
+    if not script_path.is_relative_to(repo_dir):
+        raise HTTPException(status_code=400, detail=f"Script path escapes repo directory: {script_path}")
+    if not shader_lists_dir.is_relative_to(repo_dir):
+        raise HTTPException(status_code=400, detail=f"Shader list path escapes repo directory: {shader_lists_dir}")
     if not script_path.exists():
         raise HTTPException(status_code=404, detail=f"Shader list script not found: {script_path}")
 
     pull_result = await asyncio.to_thread(
         subprocess.run,
-        ["git", "-C", str(repo_dir), "pull", "--ff-only"],
+        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo_dir), "pull", "--ff-only"],
         capture_output=True,
         text=True,
         check=False,
