@@ -25,6 +25,7 @@ from .pachinball_router import pachinball_router
 from .mod_router import mod_router
 from .presets_router import presets_router
 from .textures_router import textures_router
+from .deploy_router import router as deploy_router
 from .file_watcher import start_watching
 from .remote_sync import start_remote_sync
 from . import presets
@@ -91,6 +92,7 @@ app.include_router(pachinball_router)   # ← Pachinball game content endpoints 
 app.include_router(mod_router)          # ← MOD music file endpoints (/api/mods)
 app.include_router(presets_router)      # ← MilkDrop preset endpoints (/api/presets)
 app.include_router(textures_router)     # ← Texture file endpoints (/api/textures)
+app.include_router(deploy_router)       # ← Centralized project deploy (/api/deploy)
 
 @app.get("/", response_class=HTMLResponse)
 async def media_gallery():

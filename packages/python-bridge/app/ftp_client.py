@@ -9,16 +9,23 @@ logger = get_logger("ftp_client")
 
 
 class StorageFTPClient:
-    def __init__(self):
+    def __init__(
+        self,
+        host: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        port: Optional[int] = None,
+        base_dir: Optional[str] = None,
+    ):
+        """Initialize with optional overrides; falls back to settings (useful for deploy target)."""
         # Support both EXTERNAL_FTP_* and FTP_* variables
-        # Priority: FTP_* (user settings) > EXTERNAL_FTP_* (legacy)
-        self.host = getattr(settings, 'ftp_host', None) or getattr(settings, 'external_ftp_host', None)
-        self.user = getattr(settings, 'ftp_user', None) or getattr(settings, 'external_ftp_user', None)
-        self.password = getattr(settings, 'ftp_pass', None) or getattr(settings, 'external_ftp_pass', None)
-        self.port = getattr(settings, 'ftp_port', None) or getattr(settings, 'external_ftp_port', 21)
-        self.base_dir = getattr(settings, 'ftp_upload_dir', None) or getattr(settings, 'external_ftp_dir', '/')
-        
-        # Debug logging
+        # Priority: explicit override > FTP_* (user settings) > EXTERNAL_FTP_* (legacy)
+        self.host = host or getattr(settings, 'ftp_host', None) or getattr(settings, 'external_ftp_host', None)
+        self.user = user or getattr(settings, 'ftp_user', None) or getattr(settings, 'external_ftp_user', None)
+        self.password = password or getattr(settings, 'ftp_pass', None) or getattr(settings, 'external_ftp_pass', None)
+        self.port = port or getattr(settings, 'ftp_port', None) or getattr(settings, 'external_ftp_port', 21)
+        self.base_dir = base_dir or getattr(settings, 'ftp_upload_dir', None) or getattr(settings, 'external_ftp_dir', '/')
+
         logger.info(f"FTP Client initialized: host={self.host}, port={self.port}, user={self.user}, base_dir={self.base_dir}")
         logger.info(f"Raw settings: ftp_host={getattr(settings, 'ftp_host', None)}, external_ftp_host={getattr(settings, 'external_ftp_host', None)}")
 

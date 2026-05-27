@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     ftp_upload_dir: str = "/"
     ftp_tls: bool = False
 
+    # Deploy target (storage.1ink.us or similar) - credentials stay ONLY on the VPS
+    deploy_host: Optional[str] = None
+    deploy_port: int = 22
+    deploy_user: Optional[str] = None
+    deploy_pass: Optional[str] = None
+    deploy_base_dir: str = "/"
+    deploy_auth_token: Optional[str] = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
