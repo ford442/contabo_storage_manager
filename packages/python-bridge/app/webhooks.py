@@ -882,7 +882,8 @@ async def clip_stacker_media_delete(request: Request, filename: str):
             raise HTTPException(status_code=403, detail="Forbidden")
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
+        logger.error("Unexpected error checking path traversal for media %s: %s", filename, exc)
         raise HTTPException(status_code=403, detail="Forbidden")
 
     if not media_file.exists():
