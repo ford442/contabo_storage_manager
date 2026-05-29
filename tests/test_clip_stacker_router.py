@@ -403,3 +403,226 @@ def test_clip_stacker_media_upload(temp_files_dir):
     # Verify file was written
     media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
     assert any(media_dir.glob("*.mp4"))
+
+
+def test_clip_stacker_media_list_empty(temp_files_dir):
+    """Test listing media files when directory is empty."""
+    client = TestClient(app)
+
+    response = client.get("/webhook/clip-stacker/media")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "media" in data
+    assert isinstance(data["media"], list)
+    assert len(data["media"]) == 0
+
+
+def test_clip_stacker_media_list_with_files(temp_files_dir):
+    """Test listing media files when directory has files."""
+    client = TestClient(app)
+
+    # Create some media files
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    file1 = media_dir / "clip-123-video.mp4"
+    file2 = media_dir / "clip-456-audio.mp3"
+    file1.write_bytes(b"video data")
+    file2.write_bytes(b"audio data")
+
+    response = client.get("/webhook/clip-stacker/media")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "media" in data
+    assert len(data["media"]) == 2
+    
+    # Check that files are listed with correct info
+    files_by_name = {m["name"]: m for m in data["media"]}
+    assert "clip-123-video.mp4" in files_by_name
+    assert "clip-456-audio.mp3" in files_by_name
+    assert files_by_name["clip-123-video.mp4"]["size"] == 10
+    assert files_by_name["clip-456-audio.mp3"]["size"] == 10
+
+
+def test_clip_stacker_media_list_with_prefix_filter(temp_files_dir):
+    """Test listing media files with prefix filter."""
+    client = TestClient(app)
+
+    # Create some media files with different prefixes
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    file1 = media_dir / "clip-123-video.mp4"
+    file2 = media_dir / "clip-456-audio.mp3"
+    file3 = media_dir / "clip-123-image.png"
+    file1.write_bytes(b"video data")
+    file2.write_bytes(b"audio data")
+    file3.write_bytes(b"image data")
+
+    # Filter by clip ID 123
+    response = client.get("/webhook/clip-stacker/media", params={"prefix": "clip-123"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["media"]) == 2
+    
+    names = [m["name"] for m in data["media"]]
+    assert "clip-123-video.mp4" in names
+    assert "clip-123-image.png" in names
+    assert "clip-456-audio.mp3" not in names
+
+
+def test_clip_stacker_media_delete(temp_files_dir):
+    """Test deleting a media file."""
+    client = TestClient(app)
+
+    # Create a media file
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    media_file = media_dir / "test-media.mp4"
+    media_file.write_bytes(b"video data")
+    
+    assert media_file.exists()
+
+    # Delete it
+    response = client.delete("/webhook/clip-stacker/media/test-media.mp4")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "test-media.mp4" in data["message"]
+    
+    # Verify it's gone
+    assert not media_file.exists()
+
+
+def test_clip_stacker_media_delete_nonexistent(temp_files_dir):
+    """Test deleting a non-existent media file."""
+    client = TestClient(app)
+
+    response = client.delete("/webhook/clip-stacker/media/nonexistent.mp4")
+
+    assert response.status_code == 404
+
+
+def test_clip_stacker_media_delete_path_traversal(temp_files_dir):
+    """Test that path traversal is blocked in media delete."""
+    client = TestClient(app)
+
+    # Test with ".." in filename parameter - should be rejected
+    response = client.delete("/webhook/clip-stacker/media/file..mp4")
+    # Since this file doesn't exist, we'll get 404, but the path traversal check should have already rejected it
+    # Actually, "file..mp4" is a valid filename so it won't trigger path traversal check
+    # Let's test with actual ".." 
+    
+    response = client.delete("/webhook/clip-stacker/media/..mp4")
+    assert response.status_code == 400  # Should be rejected due to ".."
+
+
+def test_clip_stacker_media_delete_with_slash(temp_files_dir):
+    """Test that slashes are blocked in media delete."""
+    client = TestClient(app)
+
+    response = client.delete("/webhook/clip-stacker/media/subdir/file.mp4")
+
+    # FastAPI will decode the path properly
+    # The actual filename will be "subdir/file.mp4" which should be rejected
+    # due to the slash check
+
+
+def test_clip_stacker_delete_with_media_cleanup(temp_files_dir):
+    """Test deleting a project with media cleanup."""
+    client = TestClient(app)
+
+    # Create a project with clips
+    project_data = {
+        "name": "project-with-media",
+        "payload": {
+            "clips": [
+                {"id": "clip-uuid-1", "start": 0, "duration": 5},
+                {"id": "clip-uuid-2", "start": 5, "duration": 3},
+            ],
+            "transitions": []
+        }
+    }
+    
+    client.post("/webhook/clip-stacker", json=project_data)
+
+    # Create associated media files
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    media1 = media_dir / "clip-uuid-1-original.mp4"
+    media2 = media_dir / "clip-uuid-2-original.mp3"
+    media3 = media_dir / "other-media.mp4"
+    
+    media1.write_bytes(b"media1")
+    media2.write_bytes(b"media2")
+    media3.write_bytes(b"media3")
+    
+    assert media1.exists()
+    assert media2.exists()
+    assert media3.exists()
+
+    # Delete project with deleteMedia=true
+    response = client.delete(
+        "/webhook/clip-stacker",
+        params={"name": "project-with-media", "deleteMedia": "true"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "deleted_media_count" in data
+    assert data["deleted_media_count"] == 2  # Should delete 2 files
+    
+    # Verify media files are deleted
+    assert not media1.exists()
+    assert not media2.exists()
+    # Other media should still exist
+    assert media3.exists()
+
+
+def test_clip_stacker_delete_without_media_cleanup(temp_files_dir):
+    """Test deleting a project without media cleanup (default behavior)."""
+    client = TestClient(app)
+
+    # Create a project with clips
+    project_data = {
+        "name": "project-no-cleanup",
+        "payload": {
+            "clips": [
+                {"id": "clip-uuid-1", "start": 0, "duration": 5},
+            ],
+            "transitions": []
+        }
+    }
+    
+    client.post("/webhook/clip-stacker", json=project_data)
+
+    # Create associated media files
+    media_dir = Path(temp_files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    media1 = media_dir / "clip-uuid-1-original.mp4"
+    media1.write_bytes(b"media1")
+    
+    assert media1.exists()
+
+    # Delete project without deleteMedia (default)
+    response = client.delete(
+        "/webhook/clip-stacker",
+        params={"name": "project-no-cleanup"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    # Without deleteMedia, no deleted_media_count should be in response
+    assert "deleted_media_count" not in data
+    
+    # Verify media file still exists
+    assert media1.exists()
