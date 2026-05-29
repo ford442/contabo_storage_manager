@@ -1,4 +1,5 @@
 import ftplib
+import io
 import ssl
 from pathlib import Path
 from typing import Optional
@@ -17,41 +18,38 @@ class StorageFTPClient:
         port: Optional[int] = None,
         base_dir: Optional[str] = None,
     ):
-        """Initialize with optional overrides; falls back to settings (useful for deploy target)."""
-        # Support both EXTERNAL_FTP_* and FTP_* variables
-        # Priority: explicit override > FTP_* (user settings) > EXTERNAL_FTP_* (legacy)
         self.host = host or getattr(settings, 'ftp_host', None) or getattr(settings, 'external_ftp_host', None)
         self.user = user or getattr(settings, 'ftp_user', None) or getattr(settings, 'external_ftp_user', None)
         self.password = password or getattr(settings, 'ftp_pass', None) or getattr(settings, 'external_ftp_pass', None)
         self.port = port or getattr(settings, 'ftp_port', None) or getattr(settings, 'external_ftp_port', 21)
         self.base_dir = base_dir or getattr(settings, 'ftp_upload_dir', None) or getattr(settings, 'external_ftp_dir', '/')
+        self._conn = None
 
         logger.info(f"FTP Client initialized: host={self.host}, port={self.port}, user={self.user}, base_dir={self.base_dir}")
-        logger.info(f"Raw settings: ftp_host={getattr(settings, 'ftp_host', None)}, external_ftp_host={getattr(settings, 'external_ftp_host', None)}")
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
 
     def _get_connection(self):
-        """Create FTP or SFTP connection based on port."""
-        # Port 22 typically indicates SFTP (SSH)
+        """Open a fresh FTP or SFTP connection."""
         if self.port == 22:
             return self._get_sftp_connection()
-        else:
-            return self._get_ftps_connection()
+        return self._get_ftps_connection()
 
     def _get_ftps_connection(self):
-        """Create a secure FTP_TLS connection."""
         logger.info(f"Connecting to FTPS server {self.host}:{self.port}")
         ftp = ftplib.FTP_TLS()
         ftp.connect(self.host, self.port, timeout=30)
         ftp.login(self.user, self.password)
-        ftp.prot_p()  # Switch to secure data connection
+        ftp.prot_p()
         return ftp
 
     def _get_sftp_connection(self):
-        """Create an SFTP connection using paramiko."""
         try:
             import paramiko
         except ImportError:
-            logger.error("paramiko is required for SFTP connections")
+            logger.error("paramiko is required for SFTP connections (pip install paramiko)")
             raise
 
         logger.info(f"Connecting to SFTP server {self.host}:{self.port}")
@@ -60,86 +58,116 @@ class StorageFTPClient:
         sftp = paramiko.SFTPClient.from_transport(transport)
         return sftp
 
-    def _ensure_remote_dir(self, ftp, rel_path: str):
-        """Recursively create directories on the FTP/SFTP server."""
+    def _is_alive(self) -> bool:
+        """Check whether the current connection is still usable."""
+        if self._conn is None:
+            return False
+        try:
+            if hasattr(self._conn, 'voidcmd'):  # FTPS
+                self._conn.voidcmd("NOOP")
+                return True
+            else:  # SFTP — check the underlying transport
+                transport = self._conn.get_channel().get_transport()
+                return transport is not None and transport.is_active()
+        except Exception:
+            return False
+
+    def _ensure_connected(self):
+        """Return a live connection, (re)connecting as needed."""
+        if not self._is_alive():
+            self._close_conn()
+            self._conn = self._get_connection()
+        return self._conn
+
+    def _close_conn(self):
+        if self._conn is None:
+            return
+        try:
+            if hasattr(self._conn, 'quit'):
+                self._conn.quit()
+            else:
+                self._conn.close()
+        except Exception:
+            pass
+        self._conn = None
+
+    def close(self):
+        """Explicitly close and discard the persistent connection."""
+        self._close_conn()
+
+    # ------------------------------------------------------------------
+    # Directory helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_remote_dir(self, conn, rel_path: str):
+        """Recursively create directories on the remote server."""
         parts = rel_path.strip("/").split("/")
         current_path = self.base_dir.rstrip("/")
-        
+
         for part in parts:
             current_path = f"{current_path}/{part}"
             try:
-                if hasattr(ftp, 'cwd'):  # FTPS
-                    ftp.cwd(current_path)
+                if hasattr(conn, 'cwd'):  # FTPS
+                    conn.cwd(current_path)
                 else:  # SFTP
-                    ftp.stat(current_path)
-            except (ftplib.error_perm, IOError):
+                    conn.stat(current_path)
+            except (ftplib.error_perm, IOError, OSError):
                 logger.info(f"Creating remote directory: {current_path}")
-                if hasattr(ftp, 'mkd'):  # FTPS
-                    ftp.mkd(current_path)
-                else:  # SFTP
-                    ftp.mkdir(current_path)
+                if hasattr(conn, 'mkd'):
+                    conn.mkd(current_path)
+                else:
+                    conn.mkdir(current_path)
+
+    # ------------------------------------------------------------------
+    # Upload
+    # ------------------------------------------------------------------
 
     def upload_bytes(self, data: bytes, remote_rel_path: str) -> bool:
-        """Upload raw bytes to the remote FTP/SFTP server."""
+        """Upload raw bytes to the remote server. Raises on failure."""
         if not self.host:
-            logger.warning("FTP upload skipped: FTP_HOST not configured")
-            return False
+            raise RuntimeError("FTP upload skipped: FTP_HOST not configured")
         if not self.user:
-            logger.warning("FTP upload skipped: FTP_USER not configured")
-            return False
+            raise RuntimeError("FTP upload skipped: FTP_USER not configured")
         if not self.password:
-            logger.warning("FTP upload skipped: FTP_PASS not configured")
-            return False
+            raise RuntimeError("FTP upload skipped: FTP_PASS not configured")
 
-        conn = None
-        try:
-            conn = self._get_connection()
-            
-            # 1. Ensure the subfolders exist (e.g., image-effects/shaders)
-            remote_path_obj = Path(remote_rel_path)
-            if remote_path_obj.parent != Path("."):
-                self._ensure_remote_dir(conn, str(remote_path_obj.parent))
+        for attempt in range(2):
+            try:
+                conn = self._ensure_connected()
 
-            # 2. Upload the file
-            target_file = f"{self.base_dir.rstrip('/')}/{remote_rel_path.lstrip('/')}"
-            
-            if hasattr(conn, 'storbinary'):  # FTPS
-                import io
-                bio = io.BytesIO(data)
-                conn.storbinary(f"STOR {target_file}", bio)
-            else:  # SFTP
-                import io
-                bio = io.BytesIO(data)
-                conn.putfo(bio, target_file)
-            
-            logger.info(f"Successfully uploaded to: {target_file}")
-            return True
+                remote_path_obj = Path(remote_rel_path)
+                if remote_path_obj.parent != Path("."):
+                    self._ensure_remote_dir(conn, str(remote_path_obj.parent))
 
-        except Exception as e:
-            logger.error(f"FTP upload failed: {e}")
-            return False
-        finally:
-            if conn:
-                try:
-                    if hasattr(conn, 'quit'):  # FTPS
-                        conn.quit()
-                    else:  # SFTP
-                        conn.close()
-                except:
-                    pass
+                target_file = f"{self.base_dir.rstrip('/')}/{remote_rel_path.lstrip('/')}"
+
+                if hasattr(conn, 'storbinary'):  # FTPS
+                    conn.storbinary(f"STOR {target_file}", io.BytesIO(data))
+                else:  # SFTP
+                    conn.putfo(io.BytesIO(data), target_file)
+
+                logger.info(f"Uploaded: {target_file} ({len(data)} bytes)")
+                return True
+
+            except (ftplib.error_temp, EOFError, ConnectionResetError, BrokenPipeError, OSError) as e:
+                # Likely a stale connection — invalidate and retry once
+                logger.warning(f"Connection error on attempt {attempt + 1}, reconnecting: {e}")
+                self._close_conn()
+                if attempt == 1:
+                    logger.error(f"FTP upload failed after retry: {e}")
+                    raise
+
+            except Exception as e:
+                logger.error(f"FTP upload failed: {e}")
+                raise
+
+        return False  # unreachable but satisfies type checker
+
+    # ------------------------------------------------------------------
+    # Sync (download from remote)
+    # ------------------------------------------------------------------
 
     def sync_dir_from_remote(self, remote_rel_dir: str, local_dir: Path, extensions: tuple[str, ...] = (), remove_stale: bool = False) -> dict:
-        """Sync a remote directory to local, downloading new/changed files.
-
-        Args:
-            remote_rel_dir: Relative directory path on remote (e.g. 'flac_songs')
-            local_dir: Local directory path to sync into
-            extensions: If provided, only sync files with these extensions
-            remove_stale: If True, delete local files not present on remote
-
-        Returns:
-            dict with keys: downloaded, skipped, removed, errors, total
-        """
         result = {"downloaded": 0, "skipped": 0, "removed": 0, "errors": 0, "total": 0}
 
         if not self.host or not self.user or not self.password:
@@ -150,12 +178,10 @@ class StorageFTPClient:
         local_dir = Path(local_dir)
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        conn = None
         try:
-            conn = self._get_connection()
+            conn = self._ensure_connected()
             is_sftp = hasattr(conn, 'listdir')
 
-            # List remote files
             if is_sftp:
                 remote_entries = conn.listdir(remote_dir)
             else:
@@ -164,7 +190,6 @@ class StorageFTPClient:
 
             remote_files = []
             for entry in remote_entries:
-                # Filter by extension if specified
                 if extensions:
                     if not any(entry.lower().endswith(ext.lower()) for ext in extensions):
                         continue
@@ -192,7 +217,6 @@ class StorageFTPClient:
                 if local_path.exists():
                     local_size = local_path.stat().st_size
                     local_mtime = local_path.stat().st_mtime
-                    # Skip if same size and local is newer or same age
                     if remote_size is not None and local_size == remote_size:
                         if remote_mtime is None or local_mtime >= remote_mtime:
                             result["skipped"] += 1
@@ -210,7 +234,6 @@ class StorageFTPClient:
                     logger.error("Failed to download %s: %s", filename, exc)
                     result["errors"] += 1
 
-            # Remove stale local files if requested
             if remove_stale:
                 for local_file in local_dir.iterdir():
                     if local_file.is_file() and local_file.name not in remote_set:
@@ -222,21 +245,14 @@ class StorageFTPClient:
         except Exception as exc:
             logger.error("FTP sync failed for %s: %s", remote_rel_dir, exc)
         finally:
-            if conn:
-                try:
-                    if hasattr(conn, 'quit'):
-                        conn.quit()
-                    else:
-                        conn.close()
-                except Exception:
-                    pass
+            # Leave the persistent connection open; caller or GC will close it.
+            pass
 
         logger.info("Sync %s: %d downloaded, %d skipped, %d removed, %d errors, %d total",
                     remote_rel_dir, result["downloaded"], result["skipped"], result["removed"], result["errors"], result["total"])
         return result
 
     def sync_mods_from_remote(self, local_dir: Path) -> dict:
-        """Download MOD files from remote FTP/SFTP to local directory."""
         return self.sync_dir_from_remote(
             "mods",
             local_dir,
@@ -245,36 +261,27 @@ class StorageFTPClient:
         )
 
 
-# Global helper function used in webhooks.py
+# ------------------------------------------------------------------
+# Module-level helpers used by webhooks.py
+# ------------------------------------------------------------------
+
 def upload_bytes(data: bytes, rel_path: str):
     client = StorageFTPClient()
     return client.upload_bytes(data, rel_path)
 
 
-# Singleton instance for webhooks.py
 class FTPClientWrapper:
-    """Async wrapper for StorageFTPClient for use in webhooks."""
-    
+    """Async wrapper for StorageFTPClient."""
+
     async def upload(self, local_path: Path, rel_path: str) -> Optional[str]:
-        """Upload a file from local path to FTP.
-        
-        Args:
-            local_path: Path to the local file
-            rel_path: Relative path on the remote server
-            
-        Returns:
-            The remote path if successful, None otherwise
-        """
         import asyncio
-        from pathlib import Path
-        
+
         def _upload():
             client = StorageFTPClient()
             data = Path(local_path).read_bytes()
-            success = client.upload_bytes(data, rel_path)
-            return rel_path if success else None
-        
-        # Run sync FTP upload in thread pool
+            client.upload_bytes(data, rel_path)
+            return rel_path
+
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _upload)
 
