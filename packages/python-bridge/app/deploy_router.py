@@ -17,7 +17,7 @@ with explicit overrides so the internal FTP vs deploy target can differ.
 import io
 import zipfile
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
-from typing import Optional
+from typing import Optional, Literal
 from pathlib import Path
 
 from .config import settings
@@ -29,6 +29,7 @@ logger = get_logger("deploy_router")
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
 _deploy_client: Optional[StorageFTPClient] = None
+_deploy_client_go: Optional[StorageFTPClient] = None
 
 
 def get_deploy_client() -> StorageFTPClient:
@@ -45,6 +46,24 @@ def get_deploy_client() -> StorageFTPClient:
             base_dir=settings.deploy_base_dir,
         )
     return _deploy_client
+
+
+def get_deploy_client_go() -> StorageFTPClient:
+    """Return the shared (persistent-connection) deploy client for go target."""
+    global _deploy_client_go
+    if not settings.deploy_base_dir_go:
+        raise HTTPException(status_code=400, detail="DEPLOY_BASE_DIR_GO is not configured")
+    if _deploy_client_go is None:
+        if not settings.deploy_host:
+            logger.warning("DEPLOY_HOST not configured - deploys will fail")
+        _deploy_client_go = StorageFTPClient(
+            host=settings.deploy_host,
+            user=settings.deploy_user,
+            **{"password": settings.deploy_pass},
+            port=settings.deploy_port,
+            base_dir=settings.deploy_base_dir_go,
+        )
+    return _deploy_client_go
 
 
 def _check_token(x_deploy_token: Optional[str], project_name: str):
@@ -89,6 +108,7 @@ async def upload_project_file(
         default=None,
         description="Optional target subfolder (supports nested paths like 'my-site' or 'sites/example.com'). Defaults to project_name.",
     ),
+    target_site: Literal["test", "go"] = Form(default="test", description="Deploy target site: 'test' (default) or 'go'."),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
 ):
     """Upload a single file for a project deployment.
@@ -111,7 +131,12 @@ async def upload_project_file(
         if not content:
             raise HTTPException(status_code=400, detail="Empty file upload")
 
-        client = get_deploy_client()
+        if target_site == "go":
+            base_dir = settings.deploy_base_dir_go
+            client = get_deploy_client_go()
+        else:
+            base_dir = settings.deploy_base_dir
+            client = get_deploy_client()
         target_rel = f"{target_prefix}/{safe_rel_path}" if safe_rel_path else target_prefix
 
         logger.info(
@@ -121,7 +146,7 @@ async def upload_project_file(
 
         client.upload_bytes(content, target_rel)
 
-        remote_target = f"{settings.deploy_base_dir or ''}/{target_rel}".replace("//", "/")
+        remote_target = f"{base_dir or ''}/{target_rel}".replace("//", "/")
         logger.info("DEPLOY file OK: %s (%d bytes) -> %s", target_rel, len(content), remote_target)
 
         return {
@@ -153,6 +178,7 @@ async def upload_project_zip(
         default=None,
         description="Optional target subfolder (supports nested paths). Defaults to project_name.",
     ),
+    target_site: Literal["test", "go"] = Form(default="test", description="Deploy target site: 'test' (default) or 'go'."),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
 ):
     """
@@ -199,7 +225,12 @@ async def upload_project_zip(
     except zipfile.BadZipFile as e:
         raise HTTPException(status_code=400, detail=f"Invalid zip file: {e}")
 
-    client = get_deploy_client()
+    if target_site == "go":
+        remote_base = settings.deploy_base_dir_go
+        client = get_deploy_client_go()
+    else:
+        remote_base = settings.deploy_base_dir
+        client = get_deploy_client()
     uploaded = []
     failed = []
     total_bytes = 0
@@ -236,7 +267,7 @@ async def upload_project_zip(
         logger.error("DEPLOY zip: ALL files failed for project=%s (%d failed)", project_name, len(failed))
         raise HTTPException(status_code=500, detail={"message": "All files failed to upload", "failed": failed})
 
-    remote_base = (settings.deploy_base_dir or "").rstrip("/")
+    remote_base = (remote_base or "").rstrip("/")
     logger.info(
         "DEPLOY zip COMPLETE: project=%s target_prefix=%s uploaded=%d failed=%d total_bytes=%d -> %s/%s",
         project_name, target_prefix, len(uploaded), len(failed), total_bytes, remote_base, target_prefix
@@ -263,11 +294,12 @@ async def deploy_health():
         "deploy_host": settings.deploy_host,
         "deploy_port": settings.deploy_port,
         "base_dir": settings.deploy_base_dir,
+        "deploy_base_dir_go": settings.deploy_base_dir_go,
         "has_token": bool(settings.deploy_auth_token),
         "endpoints": {
-            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder)",
-            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder) — recommended",
+            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder + optional target_site=test|go)",
+            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder + optional target_site=test|go) — recommended",
             "bundle": "POST /api/deploy/{project}/bundle (legacy alias for /zip — still works for old clients)",
         },
-        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
+        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use optional target_site=test|go (default test) and X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
     }
