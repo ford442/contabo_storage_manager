@@ -790,6 +790,8 @@ await fetch(`${STORAGE_URL}/api/notes/sync`, {
 | `GET` | `/webhook/clip-stacker` | List all saved projects |
 | `DELETE` | `/webhook/clip-stacker?name=...` | Delete a project |
 | `POST` | `/webhook/clip-stacker/media` | Upload media file (`multipart/form-data`) |
+| `GET` | `/webhook/clip-stacker/media?prefix=...` | List media files (optional prefix filter) |
+| `DELETE` | `/webhook/clip-stacker/media/{filename}` | Delete a media file |
 
 **Storage:** `files/clip-stacker/`
 
@@ -823,6 +825,29 @@ curl -X POST https://VPS_IP:8000/webhook/clip-stacker/media \
   -F "name=intro.mp4"
 ```
 
+**Example — list media files:**
+
+```bash
+# List all media files
+curl https://VPS_IP:8000/webhook/clip-stacker/media
+
+# List media files with a specific prefix (e.g., clip UUID)
+curl "https://VPS_IP:8000/webhook/clip-stacker/media?prefix=clip-uuid-123"
+```
+
+**Example — delete a media file:**
+
+```bash
+curl -X DELETE https://VPS_IP:8000/webhook/clip-stacker/media/clip-uuid-123-original.mp4
+```
+
+**Example — delete a project with associated media cleanup:**
+
+```bash
+# Delete project and attempt to remove its associated media files
+curl -X DELETE "https://VPS_IP:8000/webhook/clip-stacker?name=my-project&deleteMedia=true"
+```
+
 **In the clip_stacker app config:**
 
 ```js
@@ -842,6 +867,24 @@ const { payload } = await res.json();
 // List projects
 const listRes = await fetch(`${STORAGE_URL}/webhook/clip-stacker`);
 const { projects } = await listRes.json();
+
+// List media files
+const mediaRes = await fetch(`${STORAGE_URL}/webhook/clip-stacker/media`);
+const { media } = await mediaRes.json();
+
+// List media files with prefix filter (e.g., by clip ID)
+const clipMediaRes = await fetch(`${STORAGE_URL}/webhook/clip-stacker/media?prefix=clip-uuid-123`);
+const { media: clipMedia } = await clipMediaRes.json();
+
+// Delete a media file
+await fetch(`${STORAGE_URL}/webhook/clip-stacker/media/clip-uuid-123-original.mp4`, {
+  method: "DELETE"
+});
+
+// Delete project with media cleanup
+await fetch(`${STORAGE_URL}/webhook/clip-stacker?name=my-edit&deleteMedia=true`, {
+  method: "DELETE"
+});
 ```
 
 ---
