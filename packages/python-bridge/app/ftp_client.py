@@ -10,6 +10,14 @@ logger = get_logger("ftp_client")
 
 
 class StorageFTPClient:
+    """FTP/SFTP client supporting both the internal storage FTP and separate deploy targets.
+
+    The optional host/user/password/port/base_dir parameters allow callers to target
+    a completely different server (e.g. the DEPLOY_* host for project builds) while
+    reusing the same connection + upload logic. When omitted, falls back to the
+    classic FTP_* / EXTERNAL_FTP_* settings.
+    """
+
     def __init__(
         self,
         host: Optional[str] = None,
