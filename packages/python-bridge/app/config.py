@@ -71,7 +71,9 @@ class Settings(BaseSettings):
     deploy_user: Optional[str] = None
     deploy_pass: Optional[str] = None
     deploy_base_dir: str = "/"
+    deploy_base_dir_go: Optional[str] = None
     deploy_auth_token: Optional[str] = None
+    flac_player_base_url: str = "https://test.1ink.us"
 
     class Config:
         env_file = ".env"

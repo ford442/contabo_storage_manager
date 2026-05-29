@@ -1397,7 +1397,8 @@ async def create_share(request: ShareCreateRequest):
     }
     _save_shares(shares)
 
-    full_url = f"https://test.1ink.us/flac-player?share={share_id}"
+    base_player = settings.flac_player_base_url.rstrip("/")
+    full_url = f"{base_player}/flac-player?share={share_id}"
 
     return ShareCreateResponse(
         share_id=share_id,
@@ -1429,7 +1430,7 @@ async def get_share(share_id: str, request: Request):
     # Browser redirect — if Accept header prefers HTML, send user to player
     accept = request.headers.get("accept", "")
     if "text/html" in accept and "application/json" not in accept:
-        return RedirectResponse(url=f"https://test.1ink.us/flac-player?share={share_id}")
+        return RedirectResponse(url=f"{settings.flac_player_base_url.rstrip('/')}/flac-player?share={share_id}")
 
     tracks = share.get("tracks", [])
     # Ensure absolute URLs
