@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-deploy_router.py - Project deployment endpoint for contabo_storage_manager
+deploy_router.py - Centralized project deployment for contabo_storage_manager
 
-Allows per-project deploy.py scripts (in other repos) to upload built files
-to https://storage.noahcohn.com/api/deploy/{project}/file   (single file)
-  or https://storage.noahcohn.com/api/deploy/{project}/bundle (zip archive)
+Allows per-project deploy scripts (in other repos) to upload builds to a remote
+target (storage.1ink.us etc.) WITHOUT embedding any FTP/SFTP credentials.
 
-The server uses DEPLOY_* credentials (stored only in .env on the VPS) to push
-files to the target (e.g. storage.1ink.us) via SFTP/FTPS — no passwords needed
-in individual project repos.
+Endpoints (token auth via X-Deploy-Token when DEPLOY_AUTH_TOKEN is set):
+  POST /api/deploy/{project_name}/file   — single file + rel_path [+ target_folder]
+  POST /api/deploy/{project_name}/zip    — zip of build tree [+ target_folder]
+  POST /api/deploy/{project_name}/bundle — legacy alias for /zip (for older clients)
+
+All DEPLOY_* settings live only in the VPS .env. StorageFTPClient is called
+with explicit overrides so the internal FTP vs deploy target can differ.
 """
 
 import io
@@ -52,7 +55,7 @@ def _check_token(x_deploy_token: Optional[str], project_name: str):
 
 
 def _sanitize_path(name: str) -> str:
-    """Prevent path traversal."""
+    """Sanitize a single path component. Rejects traversal and unsafe chars."""
     if not name or ".." in name or name.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path component")
     cleaned = "".join(c for c in name if c.isalnum() or c in "-_.")
@@ -61,67 +64,135 @@ def _sanitize_path(name: str) -> str:
     return cleaned
 
 
+def _sanitize_target_folder(raw: Optional[str]) -> Optional[str]:
+    """Sanitize an optional target_folder that may contain subdirectories (e.g. 'sites/foo' or 'v1')."""
+    if not raw:
+        return None
+    raw = raw.strip().strip("/")
+    if not raw:
+        return None
+    try:
+        parts = [_sanitize_path(p) for p in Path(raw).parts if p not in (".", "")]
+        if not parts:
+            return None
+        return str(Path(*parts))
+    except HTTPException:
+        raise
+
+
 @router.post("/{project_name}/file")
 async def upload_project_file(
     project_name: str,
     file: UploadFile = File(...),
-    rel_path: str = Form(..., description="Relative path inside the project, e.g. 'js/app.js'"),
+    rel_path: str = Form(..., description="Relative path inside the project, e.g. 'js/app.js' or 'index.html'"),
+    target_folder: Optional[str] = Form(
+        default=None,
+        description="Optional target subfolder (supports nested paths like 'my-site' or 'sites/example.com'). Defaults to project_name.",
+    ),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
 ):
-    """Upload a single file for a project deployment."""
-    _check_token(x_deploy_token, project_name)
+    """Upload a single file for a project deployment.
 
+    The file lands at: {deploy_base}/{target_prefix}/{rel_path}
+    where target_prefix = sanitized(target_folder) or sanitized(project_name)
+    """
+    _check_token(x_deploy_token, project_name)
     project_name = _sanitize_path(project_name)
-    rel_parts = [_sanitize_path(p) for p in Path(rel_path).parts]
-    safe_rel_path = str(Path(*rel_parts))
+    target_prefix = _sanitize_target_folder(target_folder) or project_name
+
+    rel_parts = [_sanitize_path(p) for p in Path(rel_path).parts if p not in (".", "")]
+    safe_rel_path = str(Path(*rel_parts)) if rel_parts else ""
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
     try:
         content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file upload")
+
         client = get_deploy_client()
-        target_rel = f"{project_name}/{safe_rel_path}"
+        target_rel = f"{target_prefix}/{safe_rel_path}" if safe_rel_path else target_prefix
+
+        logger.info(
+            "DEPLOY file: project=%s target_prefix=%s rel_path=%s size=%d bytes",
+            project_name, target_prefix, safe_rel_path or "(root)", len(content)
+        )
+
         client.upload_bytes(content, target_rel)
 
-        logger.info("Deploy upload OK: project=%s path=%s size=%d", project_name, safe_rel_path, len(content))
+        remote_target = f"{settings.deploy_base_dir or ''}/{target_rel}".replace("//", "/")
+        logger.info("DEPLOY file OK: %s (%d bytes) -> %s", target_rel, len(content), remote_target)
+
         return {
             "status": "success",
             "project": project_name,
+            "target_prefix": target_prefix,
             "rel_path": safe_rel_path,
             "size": len(content),
-            "target": f"{settings.deploy_base_dir or ''}/{target_rel}".replace("//", "/"),
+            "target": remote_target,
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Deploy upload error for %s/%s: %s", project_name, safe_rel_path, str(e))
+        logger.error("DEPLOY file error for %s/%s: %s", project_name, safe_rel_path, str(e))
         raise HTTPException(status_code=500, detail=f"Deploy failed: {e}")
 
 
-@router.post("/{project_name}/bundle")
-async def upload_project_bundle(
+@router.post("/{project_name}/zip")
+@router.post("/{project_name}/bundle", include_in_schema=False)  # legacy alias for older clients ("Uploading bundle...")
+async def upload_project_zip(
     project_name: str,
-    bundle: UploadFile = File(..., description="Zip archive of the build output"),
+    # Support multiple field names for maximum backward compatibility with old deploy scripts
+    archive: UploadFile = File(None, description="Zip archive (preferred field name)"),
+    bundle: UploadFile = File(None, description="Legacy field name from early skeletons"),
+    file: UploadFile = File(None, description="Generic file field (some clients)"),
+    zipfile_upload: UploadFile = File(None, description="Legacy field name"),
+    target_folder: Optional[str] = Form(
+        default=None,
+        description="Optional target subfolder (supports nested paths). Defaults to project_name.",
+    ),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
 ):
     """
-    Upload a zip archive of the whole project build in one request.
+    Upload a zip archive of a project build in a single request (efficient).
 
-    The server extracts the zip and pushes all files over a single persistent
-    SFTP/FTPS connection — much faster than uploading files individually.
+    The server extracts in-memory (zipfile + BytesIO) and uploads every file
+    over the (persistent) StorageFTPClient connection using DEPLOY_* credentials.
 
-    The client should zip the build directory contents (not the directory itself),
-    so that 'index.html' lands at {project}/index.html on the remote.
+    Both /zip (canonical per spec) and /bundle (legacy) are supported so older
+    deploy scripts continue to work without changes.
+
+    Recommended client usage:
+      - Zip the *contents* of your dist/ or build/ folder
+      - POST using multipart field 'archive' (or 'bundle' / 'file' for old scripts)
+      - Optionally pass target_folder
     """
     _check_token(x_deploy_token, project_name)
     project_name = _sanitize_path(project_name)
+    target_prefix = _sanitize_target_folder(target_folder) or project_name
+
+    # Pick whichever field the client actually sent
+    upload = archive or bundle or file or zipfile_upload
+    if upload is None or not upload.filename:
+        raise HTTPException(status_code=400, detail="No zip archive provided. Use field 'archive', 'bundle', or 'file'.")
 
     try:
-        raw = await bundle.read()
+        raw = await upload.read()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read bundle: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to read zip: {e}")
+
+    zip_size = len(raw)
+    if zip_size == 0:
+        raise HTTPException(status_code=400, detail="Empty zip archive")
+
+    # Detect legacy path usage for logging
+    # (FastAPI doesn't easily expose which route matched here, so we just log the project)
+    logger.info(
+        "DEPLOY zip: project=%s target_prefix=%s zip_size=%d bytes (legacy /bundle path accepted if used)",
+        project_name, target_prefix, zip_size
+    )
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
@@ -131,51 +202,72 @@ async def upload_project_bundle(
     client = get_deploy_client()
     uploaded = []
     failed = []
+    total_bytes = 0
 
     for zip_entry in zf.infolist():
         if zip_entry.is_dir():
             continue
 
-        # Sanitize each path component
         parts = Path(zip_entry.filename).parts
         try:
-            safe_parts = [_sanitize_path(p) for p in parts]
+            safe_parts = [_sanitize_path(p) for p in parts if p not in (".", "")]
+            if not safe_parts:
+                continue
         except HTTPException:
-            logger.warning("Skipping unsafe zip entry: %s", zip_entry.filename)
-            failed.append({"path": zip_entry.filename, "error": "unsafe path"})
+            logger.warning("DEPLOY zip: skipping unsafe entry project=%s entry=%s", project_name, zip_entry.filename)
+            failed.append({"path": zip_entry.filename, "error": "unsafe path (traversal or invalid chars)"})
             continue
 
         safe_rel = str(Path(*safe_parts))
-        target_rel = f"{project_name}/{safe_rel}"
+        target_rel = f"{target_prefix}/{safe_rel}"
 
         try:
             data = zf.read(zip_entry.filename)
+            data_len = len(data)
+            total_bytes += data_len
             client.upload_bytes(data, target_rel)
             uploaded.append(safe_rel)
-            logger.info("Bundle upload OK: %s (%d bytes)", target_rel, len(data))
+            logger.debug("DEPLOY zip entry OK: %s (%d bytes)", target_rel, data_len)
         except Exception as e:
-            logger.error("Bundle upload failed for %s: %s", target_rel, e)
+            logger.error("DEPLOY zip entry failed: %s (%s)", target_rel, e)
             failed.append({"path": safe_rel, "error": str(e)})
 
     if failed and not uploaded:
+        logger.error("DEPLOY zip: ALL files failed for project=%s (%d failed)", project_name, len(failed))
         raise HTTPException(status_code=500, detail={"message": "All files failed to upload", "failed": failed})
+
+    remote_base = (settings.deploy_base_dir or "").rstrip("/")
+    logger.info(
+        "DEPLOY zip COMPLETE: project=%s target_prefix=%s uploaded=%d failed=%d total_bytes=%d -> %s/%s",
+        project_name, target_prefix, len(uploaded), len(failed), total_bytes, remote_base, target_prefix
+    )
 
     return {
         "status": "success" if not failed else "partial",
         "project": project_name,
+        "target_prefix": target_prefix,
         "uploaded": len(uploaded),
         "failed": failed,
         "files": uploaded,
+        "total_bytes": total_bytes,
+        "zip_size": zip_size,
     }
 
 
 @router.get("/health")
 async def deploy_health():
+    """Health and configuration status for the centralized deploy system."""
     configured = bool(settings.deploy_host and settings.deploy_user)
     return {
         "status": "ok" if configured else "not_configured",
         "deploy_host": settings.deploy_host,
         "deploy_port": settings.deploy_port,
+        "base_dir": settings.deploy_base_dir,
         "has_token": bool(settings.deploy_auth_token),
-        "message": "POST /api/deploy/{project}/file — single file. POST /api/deploy/{project}/bundle — zip archive (faster).",
+        "endpoints": {
+            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder)",
+            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder) — recommended",
+            "bundle": "POST /api/deploy/{project}/bundle (legacy alias for /zip — still works for old clients)",
+        },
+        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
     }
