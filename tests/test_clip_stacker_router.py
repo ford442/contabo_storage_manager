@@ -512,8 +512,13 @@ def test_clip_stacker_media_delete_path_traversal(temp_files_dir):
     """Test that path traversal is blocked in media delete."""
     client = TestClient(app)
 
+    # Test with ".." - should be rejected
     response = client.delete("/webhook/clip-stacker/media/..mp4")
     assert response.status_code == 400  # Should be rejected due to ".."
+
+    # Test with Windows-style backslash - should be rejected
+    response2 = client.delete("/webhook/clip-stacker/media/..\\file.mp4")
+    assert response2.status_code == 400  # Should be rejected due to "\\"
 
 
 def test_clip_stacker_media_delete_with_slash(temp_files_dir):
