@@ -8,6 +8,7 @@ target (storage.1ink.us etc.) WITHOUT embedding any FTP/SFTP credentials.
 Endpoints (token auth via X-Deploy-Token when DEPLOY_AUTH_TOKEN is set):
   POST /api/deploy/{project_name}/file   — single file + rel_path [+ target_folder]
   POST /api/deploy/{project_name}/zip    — zip of build tree [+ target_folder]
+  POST /api/deploy/{project_name}/bundle — legacy alias for /zip (for older clients)
 
 All DEPLOY_* settings live only in the VPS .env. StorageFTPClient is called
 with explicit overrides so the internal FTP vs deploy target can differ.
@@ -70,7 +71,6 @@ def _sanitize_target_folder(raw: Optional[str]) -> Optional[str]:
     raw = raw.strip().strip("/")
     if not raw:
         return None
-    # Split, sanitize each segment, rejoin
     try:
         parts = [_sanitize_path(p) for p in Path(raw).parts if p not in (".", "")]
         if not parts:
@@ -100,7 +100,6 @@ async def upload_project_file(
     project_name = _sanitize_path(project_name)
     target_prefix = _sanitize_target_folder(target_folder) or project_name
 
-    # Support rel_path with subdirectories (each segment sanitized)
     rel_parts = [_sanitize_path(p) for p in Path(rel_path).parts if p not in (".", "")]
     safe_rel_path = str(Path(*rel_parts)) if rel_parts else ""
 
@@ -142,9 +141,14 @@ async def upload_project_file(
 
 
 @router.post("/{project_name}/zip")
+@router.post("/{project_name}/bundle", include_in_schema=False)  # legacy alias for older clients ("Uploading bundle...")
 async def upload_project_zip(
     project_name: str,
-    archive: UploadFile = File(..., description="Zip archive of the build output (zip the *contents* of dist/build, not a wrapper dir)"),
+    # Support multiple field names for maximum backward compatibility with old deploy scripts
+    archive: UploadFile = File(None, description="Zip archive (preferred field name)"),
+    bundle: UploadFile = File(None, description="Legacy field name from early skeletons"),
+    file: UploadFile = File(None, description="Generic file field (some clients)"),
+    zipfile_upload: UploadFile = File(None, description="Legacy field name"),
     target_folder: Optional[str] = Form(
         default=None,
         description="Optional target subfolder (supports nested paths). Defaults to project_name.",
@@ -157,19 +161,25 @@ async def upload_project_zip(
     The server extracts in-memory (zipfile + BytesIO) and uploads every file
     over the (persistent) StorageFTPClient connection using DEPLOY_* credentials.
 
-    Recommended client usage:
-      - Zip the *contents* of your dist/ or build/ folder (so index.html is at root of zip)
-      - POST the .zip using multipart field name 'archive'
-      - Optionally pass target_folder (form field) to deploy under a custom subdir on the remote
+    Both /zip (canonical per spec) and /bundle (legacy) are supported so older
+    deploy scripts continue to work without changes.
 
-    Final remote location: {DEPLOY_BASE_DIR}/{target_prefix}/{zip-entry-path}
+    Recommended client usage:
+      - Zip the *contents* of your dist/ or build/ folder
+      - POST using multipart field 'archive' (or 'bundle' / 'file' for old scripts)
+      - Optionally pass target_folder
     """
     _check_token(x_deploy_token, project_name)
     project_name = _sanitize_path(project_name)
     target_prefix = _sanitize_target_folder(target_folder) or project_name
 
+    # Pick whichever field the client actually sent
+    upload = archive or bundle or file or zipfile_upload
+    if upload is None or not upload.filename:
+        raise HTTPException(status_code=400, detail="No zip archive provided. Use field 'archive', 'bundle', or 'file'.")
+
     try:
-        raw = await archive.read()
+        raw = await upload.read()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read zip: {e}")
 
@@ -177,8 +187,10 @@ async def upload_project_zip(
     if zip_size == 0:
         raise HTTPException(status_code=400, detail="Empty zip archive")
 
+    # Detect legacy path usage for logging
+    # (FastAPI doesn't easily expose which route matched here, so we just log the project)
     logger.info(
-        "DEPLOY zip: project=%s target_prefix=%s zip_size=%d bytes",
+        "DEPLOY zip: project=%s target_prefix=%s zip_size=%d bytes (legacy /bundle path accepted if used)",
         project_name, target_prefix, zip_size
     )
 
@@ -196,7 +208,6 @@ async def upload_project_zip(
         if zip_entry.is_dir():
             continue
 
-        # Sanitize each path component individually (supports subdirs inside zip)
         parts = Path(zip_entry.filename).parts
         try:
             safe_parts = [_sanitize_path(p) for p in parts if p not in (".", "")]
@@ -245,7 +256,7 @@ async def upload_project_zip(
 
 @router.get("/health")
 async def deploy_health():
-    """Health and configuration status for the deploy system."""
+    """Health and configuration status for the centralized deploy system."""
     configured = bool(settings.deploy_host and settings.deploy_user)
     return {
         "status": "ok" if configured else "not_configured",
@@ -254,8 +265,9 @@ async def deploy_health():
         "base_dir": settings.deploy_base_dir,
         "has_token": bool(settings.deploy_auth_token),
         "endpoints": {
-            "file": "POST /api/deploy/{project}/file  (multipart: file, rel_path, optional target_folder)",
-            "zip": "POST /api/deploy/{project}/zip   (multipart: archive, optional target_folder) — recommended for speed",
+            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder)",
+            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder) — recommended",
+            "bundle": "POST /api/deploy/{project}/bundle (legacy alias for /zip — still works for old clients)",
         },
-        "message": "Centralized deploys. Credentials live only on the VPS. Use X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
+        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
     }
