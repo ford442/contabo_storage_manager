@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .config import settings
@@ -587,6 +587,20 @@ updatedAt: {updated_at}
     )
 
 
+@webhook_router.options("/clip-stacker")
+async def clip_stacker_options():
+    """Handle OPTIONS preflight for clip-stacker endpoints."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
+
+
 @webhook_router.post("/clip-stacker", response_model=dict)
 async def clip_stacker_save(request: Request):
     """Save a clip-stacker project.
@@ -749,6 +763,20 @@ async def clip_stacker_delete(request: Request, name: str = None):
 
     project_file.unlink()
     return {"status": "success", "message": f"Project deleted: {safe_name}"}
+
+
+@webhook_router.options("/clip-stacker/media")
+async def clip_stacker_media_options():
+    """Handle OPTIONS preflight for media upload endpoint."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
 
 
 @webhook_router.post("/clip-stacker/media", response_model=dict)

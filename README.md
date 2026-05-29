@@ -781,6 +781,8 @@ await fetch(`${STORAGE_URL}/api/notes/sync`, {
 
 `clip_stacker` is a browser-based video/audio clip editor that merges clips into one MP4 via FFmpeg WebAssembly. Projects are stored as JSON metadata, and media files can be uploaded for remote reference.
 
+**CORS Support:** ✅ Enabled for all origins. Browser clients (including GitHub Pages demos and third-party embeds) can perform OPTIONS preflight checks before POST/GET/DELETE requests without failures.
+
 **Endpoints:**
 
 | Method | Endpoint | Description |
