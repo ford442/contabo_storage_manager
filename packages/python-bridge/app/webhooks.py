@@ -878,7 +878,7 @@ async def clip_stacker_media_delete(request: Request, filename: str):
     try:
         media_file_resolved = media_file.resolve()
         media_dir_resolved = media_dir.resolve()
-        if not str(media_file_resolved).startswith(str(media_dir_resolved)):
+        if not media_file_resolved.is_relative_to(media_dir_resolved):
             raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
         raise HTTPException(status_code=403, detail="Forbidden")

@@ -512,12 +512,6 @@ def test_clip_stacker_media_delete_path_traversal(temp_files_dir):
     """Test that path traversal is blocked in media delete."""
     client = TestClient(app)
 
-    # Test with ".." in filename parameter - should be rejected
-    response = client.delete("/webhook/clip-stacker/media/file..mp4")
-    # Since this file doesn't exist, we'll get 404, but the path traversal check should have already rejected it
-    # Actually, "file..mp4" is a valid filename so it won't trigger path traversal check
-    # Let's test with actual ".." 
-    
     response = client.delete("/webhook/clip-stacker/media/..mp4")
     assert response.status_code == 400  # Should be rejected due to ".."
 
@@ -526,11 +520,12 @@ def test_clip_stacker_media_delete_with_slash(temp_files_dir):
     """Test that slashes are blocked in media delete."""
     client = TestClient(app)
 
+    # FastAPI path parameter doesn't match if there's a slash in the URL path
+    # A literal slash will result in 404 before our code even runs
     response = client.delete("/webhook/clip-stacker/media/subdir/file.mp4")
 
-    # FastAPI will decode the path properly
-    # The actual filename will be "subdir/file.mp4" which should be rejected
-    # due to the slash check
+    # FastAPI will return 404 because the route doesn't match
+    assert response.status_code == 404
 
 
 def test_clip_stacker_delete_with_media_cleanup(temp_files_dir):
