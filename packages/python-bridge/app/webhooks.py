@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .config import settings
@@ -587,6 +587,20 @@ updatedAt: {updated_at}
     )
 
 
+@webhook_router.options("/clip-stacker")
+async def clip_stacker_options():
+    """Handle OPTIONS preflight for clip-stacker endpoints."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
+
+
 @webhook_router.post("/clip-stacker", response_model=dict)
 async def clip_stacker_save(request: Request):
     """Save a clip-stacker project.
@@ -717,11 +731,12 @@ async def clip_stacker_load(request: Request, name: str = None):
 
 
 @webhook_router.delete("/clip-stacker", response_model=dict)
-async def clip_stacker_delete(request: Request, name: str = None):
+async def clip_stacker_delete(request: Request, name: str = None, deleteMedia: bool = False):
     """Delete a clip-stacker project by name.
 
-    Query parameter:
+    Query parameters:
     - name: Project name (required)
+    - deleteMedia: If true, attempt to delete associated media files (optional, default: false)
     """
     if not name:
         raise HTTPException(status_code=400, detail="Missing 'name' query parameter")
@@ -747,8 +762,48 @@ async def clip_stacker_delete(request: Request, name: str = None):
     if not project_file.exists():
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
+    # Try to extract clip IDs from project for media cleanup
+    deleted_media_count = 0
+    if deleteMedia:
+        try:
+            project_data = json.loads(project_file.read_text(encoding="utf-8"))
+            clips = project_data.get("payload", {}).get("clips", [])
+            media_dir = Path(settings.files_dir) / "clip-stacker" / "media"
+            
+            # Attempt to delete media files associated with each clip
+            for clip in clips:
+                clip_id = clip.get("id")
+                if clip_id:
+                    # Look for files starting with the clip ID
+                    for media_file in media_dir.glob(f"{clip_id}-*"):
+                        try:
+                            media_file.unlink()
+                            deleted_media_count += 1
+                        except Exception as exc:
+                            logger.warning("Failed to delete associated media %s: %s", media_file.name, exc)
+        except Exception as exc:
+            logger.warning("Error during media cleanup for project %s: %s", safe_name, exc)
+            # Don't block project deletion on cleanup errors (best-effort)
+
     project_file.unlink()
-    return {"status": "success", "message": f"Project deleted: {safe_name}"}
+    result = {"status": "success", "message": f"Project deleted: {safe_name}"}
+    if deleteMedia:
+        result["deleted_media_count"] = deleted_media_count
+    return result
+
+
+@webhook_router.options("/clip-stacker/media")
+async def clip_stacker_media_options():
+    """Handle OPTIONS preflight for media upload endpoint."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
 
 
 @webhook_router.post("/clip-stacker/media", response_model=dict)
@@ -775,6 +830,100 @@ async def clip_stacker_media_upload(
     public_url = f"{base_url}/{result['local_path']}"
 
     return {"url": public_url, "local_path": result["local_path"], "size_bytes": result.get("size_bytes", 0)}
+
+
+@webhook_router.get("/clip-stacker/media", response_model=dict)
+async def clip_stacker_media_list(request: Request, prefix: str = None):
+    """List media files in clip-stacker/media directory.
+
+    Query parameter:
+    - prefix: Optional prefix to filter files (e.g., a clip ID or project name)
+
+    Response:
+    {
+        "media": [
+            {"name": "filename", "size": 1024, "url": "https://..."},
+            ...
+        ]
+    }
+    """
+    media_dir = Path(settings.files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    media_files = []
+    try:
+        for file_path in sorted(media_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not file_path.is_file():
+                continue
+            
+            filename = file_path.name
+            
+            # Filter by prefix if provided
+            if prefix:
+                if not filename.startswith(prefix):
+                    continue
+            
+            size_bytes = file_path.stat().st_size
+            base_url = str(settings.static_base_url).rstrip("/")
+            public_url = f"{base_url}/files/clip-stacker/media/{filename}"
+            
+            media_files.append({
+                "name": filename,
+                "size": size_bytes,
+                "url": public_url,
+            })
+    except Exception as exc:
+        logger.error("Error listing media files: %s", exc)
+        raise HTTPException(status_code=500, detail="Error listing media files")
+
+    return {"media": media_files}
+
+
+@webhook_router.delete("/clip-stacker/media/{filename}", response_model=dict)
+async def clip_stacker_media_delete(request: Request, filename: str):
+    """Delete a media file from clip-stacker/media.
+
+    Path parameter:
+    - filename: The filename to delete (with path-traversal protection)
+
+    Response:
+    {
+        "status": "success",
+        "message": "Media file deleted: {filename}"
+    }
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    # Reject path traversal attempts
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    media_dir = Path(settings.files_dir) / "clip-stacker" / "media"
+    media_file = media_dir / filename
+
+    # Ensure the resolved path is within media_dir (prevent traversal)
+    try:
+        media_file_resolved = media_file.resolve()
+        media_dir_resolved = media_dir.resolve()
+        if not media_file_resolved.is_relative_to(media_dir_resolved):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Unexpected error checking path traversal for media %s: %s", filename, exc)
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not media_file.exists():
+        raise HTTPException(status_code=404, detail=f"Media file '{filename}' not found")
+
+    try:
+        media_file.unlink()
+    except Exception as exc:
+        logger.error("Failed to delete media file %s: %s", filename, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete media file")
+
+    return {"status": "success", "message": f"Media file deleted: {filename}"}
 
 
 # ====================== Static File Serving ======================

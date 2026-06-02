@@ -257,6 +257,43 @@ import re as _re
 
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
+    """Fallback CORS middleware for routes that bypass nginx CORS handling.
+    
+    Responds to OPTIONS preflight requests and adds CORS headers to all responses.
+    This handles /webhook/* endpoints which may be called directly from browsers.
+    """
+    # Handle OPTIONS preflight requests
+    if request.method == "OPTIONS":
+        origin = request.headers.get("origin")
+        allowed = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+        regex = settings.cors_origin_regex.strip() or None
+        
+        # Check if origin is allowed
+        is_allowed = False
+        allow_origin = ""
+        if "*" in allowed:
+            is_allowed = True
+            allow_origin = "*"
+        elif origin and origin in allowed:
+            is_allowed = True
+            allow_origin = origin
+        elif origin and regex:
+            is_allowed = bool(_re.match(regex, origin))
+            if is_allowed:
+                allow_origin = origin
+        
+        headers = {}
+        if is_allowed and allow_origin:
+            headers = {
+                "Access-Control-Allow-Origin": allow_origin,
+                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, PUT",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+                "Access-Control-Max-Age": "86400",
+            }
+        
+        return Response(status_code=204, headers=headers)
+    
+    # Process the actual request
     response = await call_next(request)
     origin = request.headers.get("origin")
     if not origin or "access-control-allow-origin" in response.headers:
