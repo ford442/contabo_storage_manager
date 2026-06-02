@@ -113,6 +113,8 @@ class StorageFTPClient:
         current_path = self.base_dir.rstrip("/")
 
         for part in parts:
+            if not part:
+                continue
             current_path = f"{current_path}/{part}"
             try:
                 if hasattr(conn, 'cwd'):  # FTPS
@@ -125,6 +127,38 @@ class StorageFTPClient:
                     conn.mkd(current_path)
                 else:
                     conn.mkdir(current_path)
+
+    def _ensure_base_dir(self, conn):
+        """Ensure the client's base_dir itself exists (needed for fresh deploy targets like 'go')."""
+        base = (self.base_dir or "/").rstrip("/")
+        if not base or base == "/":
+            return
+        try:
+            if hasattr(conn, "cwd"):
+                conn.cwd(base)
+            else:
+                conn.stat(base)
+            return
+        except (ftplib.error_perm, IOError, OSError):
+            pass
+        # Create each component of the base path
+        parts = base.strip("/").split("/")
+        current = "/" if base.startswith("/") else ""
+        for part in parts:
+            if not part:
+                continue
+            current = f"{current}/{part}" if current else part
+            try:
+                if hasattr(conn, "cwd"):
+                    conn.cwd(current)
+                else:
+                    conn.stat(current)
+            except (ftplib.error_perm, IOError, OSError):
+                logger.info(f"Creating base directory component: {current}")
+                if hasattr(conn, "mkd"):
+                    conn.mkd(current)
+                else:
+                    conn.mkdir(current)
 
     # ------------------------------------------------------------------
     # Upload
@@ -142,6 +176,8 @@ class StorageFTPClient:
         for attempt in range(2):
             try:
                 conn = self._ensure_connected()
+
+                self._ensure_base_dir(conn)
 
                 remote_path_obj = Path(remote_rel_path)
                 if remote_path_obj.parent != Path("."):

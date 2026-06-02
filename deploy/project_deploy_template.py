@@ -39,6 +39,11 @@ CONTABO_BASE_URL: str = "https://storage.noahcohn.com"
 # Optional deploy token (recommended for security).
 # Set via environment: export DEPLOY_TOKEN="your_long_token_from_vps_env"
 DEPLOY_TOKEN: Optional[str] = os.getenv("DEPLOY_TOKEN")
+
+# Optional deploy target: "test" (default → test.1ink.us) or "go" (→ go.1ink.us)
+# Set via environment: export DEPLOY_TARGET=go
+# Requires DEPLOY_BASE_DIR_GO to be configured on the VPS for the "go" target to work.
+DEPLOY_TARGET: str = os.getenv("DEPLOY_TARGET", "test")
 # ============================================================
 
 
@@ -66,15 +71,24 @@ def deploy_bundle(build_path: Path) -> bool:
     if DEPLOY_TOKEN:
         headers["X-Deploy-Token"] = DEPLOY_TOKEN
 
+    # Build form data so that DEPLOY_TARGET=go (or target_site) is respected
+    form_data = {"target_site": DEPLOY_TARGET}
+    # If user wants a different folder under the target (e.g. "yoga" under go.1ink.us/),
+    # they can set TARGET_FOLDER env or edit here.
+    target_folder = os.getenv("TARGET_FOLDER")
+    if target_folder:
+        form_data["target_folder"] = target_folder
+
     print("Building zip archive...")
     zip_bytes = build_zip(build_path)
     print(f"Archive size: {len(zip_bytes) / 1024:.1f} KB\n")
 
-    print("Uploading bundle...")
+    print(f"Uploading bundle to target '{DEPLOY_TARGET}' ...")
     try:
         response = requests.post(
             url,
             files={"bundle": ("build.zip", zip_bytes, "application/zip")},
+            data=form_data,
             headers=headers,
             timeout=300,
         )
@@ -96,7 +110,8 @@ def deploy_bundle(build_path: Path) -> bool:
 
 
 def main():
-    print(f"\n=== Deploying '{PROJECT_NAME}' via Contabo -> storage.1ink.us ===\n")
+    target_host = "go.1ink.us" if DEPLOY_TARGET == "go" else "test.1ink.us"
+    print(f"\n=== Deploying '{PROJECT_NAME}' via Contabo -> {target_host} (target={DEPLOY_TARGET}) ===\n")
 
     build_path = Path(BUILD_DIR)
     if not build_path.exists() or not build_path.is_dir():

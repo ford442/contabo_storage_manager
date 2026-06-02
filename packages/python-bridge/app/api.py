@@ -280,6 +280,57 @@ async def list_maps():
     return MapListResponse(maps=maps, total=len(maps))
 
 
+@api_router.post("/shaders/upload")
+async def upload_shader(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    author: str = Form("ford442"),
+    shader_id: Optional[str] = Form(None),
+):
+    """Upload a .wgsl shader file with metadata (multipart form)."""
+    if not file.filename or not file.filename.endswith(".wgsl"):
+        raise HTTPException(status_code=400, detail="Only .wgsl files allowed")
+
+    # Derive shader_id from form field or filename
+    sid = shader_id or Path(file.filename).stem
+    _validate_shader_id(sid)
+
+    shaders_dir = _get_shaders_dir()
+    shader_dir = shaders_dir / sid
+    shader_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save the WGSL file
+    wgsl_path = shader_dir / f"{sid}.wgsl"
+    content = await file.read()
+    with open(wgsl_path, "wb") as f:
+        f.write(content)
+
+    # Build / merge metadata
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    meta = {
+        "id": sid,
+        "name": name or sid,
+        "author": author,
+        "date": datetime.now(timezone.utc).isoformat(),
+        "type": "shader",
+        "description": description,
+        "filename": f"{sid}.wgsl",
+        "tags": tag_list,
+        "rating": None,
+        "source": "upload",
+        "original_id": None,
+        "format": "wgsl",
+        "converted": False,
+        "has_errors": False,
+        "params": None,
+    }
+    _save_shader_meta(shader_dir, meta)
+
+    return {"success": True, "id": sid, "meta": meta}
+
+
 @api_router.get("/shaders/{shader_id}", response_model=ShaderMetadata)
 async def get_shader(shader_id: str):
     """Get a single shader's metadata by ID."""

@@ -55,6 +55,7 @@ def _make_request(accept: str) -> Request:
 
 def test_upload_project_file_default_target_uses_test_client(monkeypatch):
     monkeypatch.setattr(settings, "deploy_base_dir", "/var/www/test.1ink.us")
+    monkeypatch.setattr(settings, "deploy_auth_token", None)  # disable token check for test
     test_client = _DummyDeployClient()
     monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: test_client)
     monkeypatch.setattr(deploy_router, "get_deploy_client_go", lambda: pytest.fail("go client should not be used"))
@@ -76,6 +77,7 @@ def test_upload_project_file_default_target_uses_test_client(monkeypatch):
 
 def test_upload_project_file_go_target_requires_config(monkeypatch):
     monkeypatch.setattr(settings, "deploy_base_dir_go", None)
+    monkeypatch.setattr(settings, "deploy_auth_token", None)  # disable token check for test
     monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: pytest.fail("test client should not be used"))
 
     upload = UploadFile(file=io.BytesIO(b"hello"), filename="index.html")
@@ -97,6 +99,7 @@ def test_upload_project_file_go_target_requires_config(monkeypatch):
 
 def test_upload_project_zip_go_target_requires_config(monkeypatch):
     monkeypatch.setattr(settings, "deploy_base_dir_go", None)
+    monkeypatch.setattr(settings, "deploy_auth_token", None)  # disable token check for test
     monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: pytest.fail("test client should not be used"))
 
     upload = _zip_upload()

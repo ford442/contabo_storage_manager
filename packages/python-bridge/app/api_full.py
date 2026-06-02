@@ -1005,6 +1005,71 @@ async def list_shaders(
     except Exception as e:
         raise HTTPException(500, f"Failed to list shaders: {str(e)}")
 
+@app.get("/api/shaders/categories")
+async def list_categories():
+    """Return the category hierarchy for UI rendering."""
+    return {
+        "groups": CATEGORY_GROUPS,
+        "all_categories": [c.value for c in ShaderCategory]
+    }
+
+@app.post("/api/shaders/upload")
+async def upload_shader(
+    file: UploadFile = File(...),
+    thumbnail: UploadFile = File(None),
+    name: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    author: str = Form("ford442"),
+    coordinate: Optional[int] = Form(None)
+):
+    """Upload a .wgsl shader file with metadata."""
+    if not file.filename.endswith(".wgsl"):
+        raise HTTPException(400, "Only .wgsl files allowed")
+    
+    shader_id = str(uuid.uuid4())
+    storage_filename = f"{shader_id}.wgsl"
+    config = STORAGE_MAP["shader"]
+    full_path = f"{config['folder']}{storage_filename}"
+    
+    meta_payload = {
+        "name": name,
+        "author": author,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "type": "shader",
+        "description": description,
+        "tags": [t.strip() for t in tags.split(",")] if tags else [],
+        "filename": storage_filename,
+        "coordinate": coordinate,
+        "stars": 0.0,
+        "rating_count": 0,
+        "play_count": 0,
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "thumbnail": None
+    }
+    meta = asset_service.create_meta(meta_payload, "shader", shader_id)
+
+    try:
+        blob = bucket.blob(full_path)
+        await run_io(blob.upload_from_file, file.file, content_type="text/plain")
+
+        if thumbnail is not None:
+            if not thumbnail.filename.lower().endswith(".png"):
+                raise HTTPException(400, "Only .png thumbnails are supported")
+            thumb_path = f"{config['folder']}{shader_id}.png"
+            thumb_blob = bucket.blob(thumb_path)
+            await run_io(thumb_blob.upload_from_file, thumbnail.file, content_type="image/png")
+            meta["thumbnail"] = f"{shader_id}.png"
+            meta["thumbnail_url"] = thumb_blob.public_url
+
+        index = await asset_service.read_index("shader")
+        index.insert(0, meta)
+        await asset_service.write_index("shader", index)
+        _log_event("upload_shader", shader_id=shader_id, filename=storage_filename)
+        return {"success": True, "id": shader_id, "meta": meta}
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {str(e)}")
+
 @app.get("/api/shaders/{shader_id}", response_model=ShaderMeta)
 async def get_shader_meta(shader_id: str):
     """Get shader metadata including stars, rating_count, play_count, coordinate."""
@@ -1083,63 +1148,6 @@ async def record_shader_play(shader_id: str):
     except Exception as e:
         _log_event("record_shader_play_failed", level="error", shader_id=shader_id, error=str(e))
         raise HTTPException(500, f"Failed to record play: {str(e)}")
-
-@app.post("/api/shaders/upload")
-async def upload_shader(
-    file: UploadFile = File(...),
-    thumbnail: UploadFile = File(None),
-    name: str = Form(...),
-    description: str = Form(""),
-    tags: str = Form(""),
-    author: str = Form("ford442"),
-    coordinate: Optional[int] = Form(None)
-):
-    """Upload a .wgsl shader file with metadata."""
-    if not file.filename.endswith(".wgsl"):
-        raise HTTPException(400, "Only .wgsl files allowed")
-    
-    shader_id = str(uuid.uuid4())
-    storage_filename = f"{shader_id}.wgsl"
-    config = STORAGE_MAP["shader"]
-    full_path = f"{config['folder']}{storage_filename}"
-    
-    meta_payload = {
-        "name": name,
-        "author": author,
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "type": "shader",
-        "description": description,
-        "tags": [t.strip() for t in tags.split(",")] if tags else [],
-        "filename": storage_filename,
-        "coordinate": coordinate,
-        "stars": 0.0,
-        "rating_count": 0,
-        "play_count": 0,
-        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "thumbnail": None
-    }
-    meta = asset_service.create_meta(meta_payload, "shader", shader_id)
-
-    try:
-        blob = bucket.blob(full_path)
-        await run_io(blob.upload_from_file, file.file, content_type="text/plain")
-
-        if thumbnail is not None:
-            if not thumbnail.filename.lower().endswith(".png"):
-                raise HTTPException(400, "Only .png thumbnails are supported")
-            thumb_path = f"{config['folder']}{shader_id}.png"
-            thumb_blob = bucket.blob(thumb_path)
-            await run_io(thumb_blob.upload_from_file, thumbnail.file, content_type="image/png")
-            meta["thumbnail"] = f"{shader_id}.png"
-            meta["thumbnail_url"] = thumb_blob.public_url
-
-        index = await asset_service.read_index("shader")
-        index.insert(0, meta)
-        await asset_service.write_index("shader", index)
-        _log_event("upload_shader", shader_id=shader_id, filename=storage_filename)
-        return {"success": True, "id": shader_id, "meta": meta}
-    except Exception as e:
-        raise HTTPException(500, f"Upload failed: {str(e)}")
 
 @app.get("/api/shaders/{shader_id}/code")
 async def get_shader_code(shader_id: str):
@@ -2101,13 +2109,6 @@ async def list_gcs_folder(folder: str = Query(..., description="Folder name, e.g
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/shaders/categories")
-async def list_categories():
-    """Return the category hierarchy for UI rendering."""
-    return {
-        "groups": CATEGORY_GROUPS,
-        "all_categories": [c.value for c in ShaderCategory]
-    }
 # ========================= FTP BRIDGE ENDPOINTS =========================
 
 @app.head("/api/shaders/{shader_id}/wgsl")
