@@ -28,6 +28,31 @@ logger = get_logger("deploy_router")
 
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
+# Outer retry layer on top of ftp_client's per-upload reconnect logic.
+UPLOAD_MAX_ATTEMPTS = 3
+
+
+def _upload_bytes_with_retries(client: StorageFTPClient, data: bytes, target_rel: str) -> None:
+    """Upload with retries; resets the client connection between attempts."""
+    last_err: Optional[Exception] = None
+    for attempt in range(UPLOAD_MAX_ATTEMPTS):
+        try:
+            client.upload_bytes(data, target_rel)
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < UPLOAD_MAX_ATTEMPTS - 1:
+                logger.warning(
+                    "DEPLOY upload retry %d/%d for %s: %s",
+                    attempt + 1,
+                    UPLOAD_MAX_ATTEMPTS,
+                    target_rel,
+                    e,
+                )
+                client.close()
+    if last_err is not None:
+        raise last_err
+
 _deploy_client: Optional[StorageFTPClient] = None
 _deploy_client_go: Optional[StorageFTPClient] = None
 
@@ -157,7 +182,7 @@ async def upload_project_file(
             project_name, target_prefix, safe_rel_path or "(root)", len(content)
         )
 
-        client.upload_bytes(content, target_rel)
+        _upload_bytes_with_retries(client, content, target_rel)
 
         remote_target = f"{base_dir or ''}/{target_rel}".replace("//", "/")
         logger.info("DEPLOY file OK: %s (%d bytes) -> %s", target_rel, len(content), remote_target)
@@ -282,7 +307,7 @@ async def upload_project_zip(
             data = zf.read(zip_entry.filename)
             data_len = len(data)
             total_bytes += data_len
-            client.upload_bytes(data, target_rel)
+            _upload_bytes_with_retries(client, data, target_rel)
             uploaded.append(safe_rel)
             logger.debug("DEPLOY zip entry OK: %s (%d bytes)", target_rel, data_len)
         except Exception as e:

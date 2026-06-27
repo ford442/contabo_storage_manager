@@ -1,5 +1,6 @@
 import ftplib
 import io
+import socket
 import ssl
 from pathlib import Path
 from typing import Optional
@@ -7,6 +8,24 @@ from .config import settings
 from .logger import get_logger
 
 logger = get_logger("ftp_client")
+
+_UPLOAD_MAX_ATTEMPTS = 3
+_SFTP_KEEPALIVE_SEC = 30
+
+_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ftplib.error_temp,
+    EOFError,
+    ConnectionResetError,
+    BrokenPipeError,
+    OSError,
+    socket.error,
+)
+try:
+    import paramiko
+
+    _RETRYABLE_EXCEPTIONS = _RETRYABLE_EXCEPTIONS + (paramiko.SSHException,)
+except ImportError:
+    pass
 
 
 class StorageFTPClient:
@@ -63,6 +82,10 @@ class StorageFTPClient:
         logger.info(f"Connecting to SFTP server {self.host}:{self.port}")
         transport = paramiko.Transport((self.host, self.port))
         transport.connect(username=self.user, password=self.password)
+        try:
+            transport.set_keepalive(_SFTP_KEEPALIVE_SEC)
+        except Exception:
+            pass
         sftp = paramiko.SFTPClient.from_transport(transport)
         return sftp
 
@@ -173,7 +196,7 @@ class StorageFTPClient:
         if not self.password:
             raise RuntimeError("FTP upload skipped: FTP_PASS not configured")
 
-        for attempt in range(2):
+        for attempt in range(_UPLOAD_MAX_ATTEMPTS):
             try:
                 conn = self._ensure_connected()
 
@@ -193,12 +216,16 @@ class StorageFTPClient:
                 logger.info(f"Uploaded: {target_file} ({len(data)} bytes)")
                 return True
 
-            except (ftplib.error_temp, EOFError, ConnectionResetError, BrokenPipeError, OSError) as e:
-                # Likely a stale connection — invalidate and retry once
-                logger.warning(f"Connection error on attempt {attempt + 1}, reconnecting: {e}")
+            except _RETRYABLE_EXCEPTIONS as e:
+                logger.warning(
+                    "Connection error on attempt %d/%d, reconnecting: %s",
+                    attempt + 1,
+                    _UPLOAD_MAX_ATTEMPTS,
+                    e,
+                )
                 self._close_conn()
-                if attempt == 1:
-                    logger.error(f"FTP upload failed after retry: {e}")
+                if attempt == _UPLOAD_MAX_ATTEMPTS - 1:
+                    logger.error("FTP upload failed after %d attempts: %s", _UPLOAD_MAX_ATTEMPTS, e)
                     raise
 
             except Exception as e:

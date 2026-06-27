@@ -88,8 +88,13 @@ async def _save_upload(upload: UploadFile, rel_dir: str, remote_rel_dir: Optiona
     local_rel_path = f"{rel_dir}/{filename}"
     remote_rel_path = f"{remote_rel_dir}/{filename}" if remote_rel_dir else local_rel_path
 
-    # Upload to external storage via paramiko (if configured)
-    remote_path = await ftp_client.upload(local_path, remote_rel_path)
+    # Upload to external storage via paramiko (if configured) — non-fatal on failure,
+    # since the file is already saved locally and served from storage.noahcohn.com/files/
+    remote_path = None
+    try:
+        remote_path = await ftp_client.upload(local_path, remote_rel_path)
+    except Exception as exc:
+        logger.warning("FTP upload failed for %s (non-fatal): %s", local_rel_path, exc)
 
     return {
         "local_path": local_rel_path,

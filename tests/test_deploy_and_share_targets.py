@@ -121,6 +121,23 @@ def test_upload_project_zip_go_target_requires_config(monkeypatch):
     assert "DEPLOY_BASE_DIR_GO" in str(exc.value.detail)
 
 
+def test_upload_bytes_with_retries_recovers_after_transient_error(monkeypatch):
+    attempts = {"n": 0}
+
+    class _FlakyClient:
+        def upload_bytes(self, content, target_rel):
+            attempts["n"] += 1
+            if attempts["n"] < 2:
+                raise RuntimeError("Server connection dropped: ")
+            return True
+
+        def close(self):
+            pass
+
+    deploy_router._upload_bytes_with_retries(_FlakyClient(), b"x", "proj/a.txt")
+    assert attempts["n"] == 2
+
+
 def test_share_urls_use_flac_player_base_url(monkeypatch):
     monkeypatch.setattr(settings, "flac_player_base_url", "https://go.1ink.us/")
     monkeypatch.setattr(settings, "static_base_url", "https://storage.1ink.us")
