@@ -10,11 +10,12 @@
 
 set -euo pipefail
 
-REMOTE_USER="storage_manager"
-REMOTE_HOST="storage.1ink.us"
-REMOTE_PORT="22"
-REMOTE_DIR="storage.1ink.us/models"
-LOCAL_DIR="/data/files/models"
+# DreamHost SSH listens on 1ink.us, not storage.1ink.us (port 22 refused there).
+REMOTE_USER="${REMOTE_USER:-storage_manager}"
+REMOTE_HOST="${REMOTE_HOST:-1ink.us}"
+REMOTE_PORT="${REMOTE_PORT:-22}"
+REMOTE_DIR="${REMOTE_DIR:-storage.1ink.us/models}"
+LOCAL_DIR="${LOCAL_DIR:-/data/files/models}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HTACCESS_SRC="$SCRIPT_DIR/../deploy/models_htaccess"
 
@@ -32,7 +33,7 @@ fi
 
 echo "=== Syncing models to storage.1ink.us/models/ ==="
 echo "Source : $LOCAL_DIR"
-echo "Dest   : sftp://$REMOTE_HOST$REMOTE_DIR"
+echo "Dest   : sftp://$REMOTE_HOST/$REMOTE_DIR"
 echo ""
 
 lftp -u "$REMOTE_USER,$SFTP_PASS" "sftp://$REMOTE_HOST:$REMOTE_PORT" <<LFTP

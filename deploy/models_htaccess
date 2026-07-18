@@ -31,6 +31,13 @@ Header always set Access-Control-Expose-Headers "Content-Length, Content-Range, 
     Header always set Cache-Control "public, max-age=86400"
 </FilesMatch>
 
+# Pre-compressed model shards (.bin.gz, .wasm.gz) — serve raw bytes, not Content-Encoding: gzip
+<FilesMatch "\.gz$">
+    RemoveEncoding .gz
+    AddType application/octet-stream .gz
+    Header always set Cache-Control "public, max-age=31536000, immutable"
+</FilesMatch>
+
 # Preflight
 <IfModule mod_rewrite.c>
     RewriteEngine On
