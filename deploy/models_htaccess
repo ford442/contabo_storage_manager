@@ -1,5 +1,8 @@
-# Models directory — WebLLM-compatible serving
-# Brotli if mod_brotli is available (DreamHost may support it), gzip fallback
+# Models directory — WebLLM-compatible serving on storage.1ink.us (DreamHost Apache)
+# Brotli if mod_brotli is available, gzip fallback for JSON/text.
+#
+# DreamHost panel injects a weak Cache-Control / Expires — unset those first so
+# our immutable headers win for model shards.
 
 <IfModule mod_brotli.c>
     AddOutputFilterByType BROTLI_COMPRESS application/json application/javascript text/plain
@@ -12,7 +15,15 @@
 # Vary so caches know to store compressed and uncompressed separately
 Header append Vary Accept-Encoding
 
-# Range requests — required for WebLLM resumable downloads
+# Clear host-panel defaults that otherwise override FilesMatch below
+Header unset Cache-Control
+Header always unset Cache-Control
+Header unset Expires
+Header always unset Expires
+
+# Range requests — required for WebLLM resumable / parallel downloads
+Header unset Accept-Ranges
+Header always unset Accept-Ranges
 Header always set Accept-Ranges "bytes"
 
 # CORS — browser needs this to fetch from a different origin
@@ -22,12 +33,20 @@ Header always set Access-Control-Allow-Headers "Range, Accept-Ranges, Content-Ra
 Header always set Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges"
 
 # Cache — model weights are immutable once uploaded
-<FilesMatch "\.(bin|wasm|safetensors|onnx|mlmodel)$">
+<FilesMatch "\.(bin|wasm|safetensors|onnx|mlmodel|gguf)$">
+    Header unset Cache-Control
+    Header always unset Cache-Control
+    Header unset Expires
+    Header always unset Expires
     Header always set Cache-Control "public, max-age=31536000, immutable"
 </FilesMatch>
 
-# JSON configs change rarely
+# JSON configs change rarely (tokenizer / mlc-chat-config)
 <FilesMatch "\.json$">
+    Header unset Cache-Control
+    Header always unset Cache-Control
+    Header unset Expires
+    Header always unset Expires
     Header always set Cache-Control "public, max-age=86400"
 </FilesMatch>
 

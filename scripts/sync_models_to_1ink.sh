@@ -4,8 +4,8 @@
 # Uploads .htaccess for CORS + gzip/brotli headers.
 # Safe to re-run — lftp mirror --only-newer skips unchanged files.
 #
-# Usage:
-#   export SFTP_PASS='storage442'
+# Usage (DreamHost SFTP user storage_manager, home /home/storage_manager):
+#   export SFTP_PASS='…'
 #   bash scripts/sync_models_to_1ink.sh
 
 set -euo pipefail
@@ -21,7 +21,7 @@ HTACCESS_SRC="$SCRIPT_DIR/../deploy/models_htaccess"
 
 if [[ -z "${SFTP_PASS:-}" ]]; then
   echo "ERROR: Set SFTP_PASS env var before running:"
-  echo "  export SFTP_PASS='storage442'"
+  echo "  export SFTP_PASS='…'   # storage_manager @ storage.1ink.us:22"
   echo "  bash scripts/sync_models_to_1ink.sh"
   exit 1
 fi
