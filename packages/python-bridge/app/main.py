@@ -370,6 +370,45 @@ async def sync_music_admin(background_tasks: BackgroundTasks):
     return {"success": True, "message": "Music sync started in background"}
 
 
+@app.post("/api/admin/sync")
+async def admin_sync_library(background_tasks: BackgroundTasks):
+    """Generic library sync used by mod-player and other clients.
+
+    - Indexes local MOD files immediately (fast path for library UI)
+    - Best-effort remote MOD pull + GCS music sync run in the background
+      so a dead remote host never blocks the response for minutes
+    """
+    from .mod_router import _scan_mods_sync
+
+    # Local-only index first — always returns quickly.
+    try:
+        mods_result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: _scan_mods_sync(pull_remote=False, extract_metadata=True)
+        )
+        mods_payload = mods_result.model_dump()
+    except Exception as exc:
+        logger.error("admin sync mods scan failed: %s", exc)
+        mods_payload = {"error": str(exc), "total": 0, "added": 0, "updated": 0, "scanned": 0}
+
+    def _background_remote_pull():
+        try:
+            _scan_mods_sync(pull_remote=True, extract_metadata=False)
+        except Exception as exc:
+            logger.error("background mods remote pull failed: %s", exc)
+
+    background_tasks.add_task(_background_remote_pull)
+    # Music sync stays background (can take a long time)
+    await sync_music_admin(background_tasks)
+
+    total = int(mods_payload.get("total") or 0)
+    return {
+        "ok": True,
+        "synced": total,
+        "message": mods_payload.get("message") or f"Library sync complete ({total} mods indexed)",
+        "mods": mods_payload,
+    }
+
+
 @app.post("/api/admin/run")
 async def run_remote_command(command_key: str, background_tasks: BackgroundTasks):
     if command_key not in ALLOWED_COMMANDS:

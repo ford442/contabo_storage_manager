@@ -623,15 +623,37 @@ def _get_songs_file() -> Path:
     return songs_file
 
 
+# Per-worker mtime cache for songs.json — avoids re-parsing ~180KB on every request.
+_songs_cache: Optional[List[dict]] = None
+_songs_cache_mtime: Optional[float] = None
+
+
 def _load_songs() -> List[dict]:
-    """Load songs from JSON file."""
+    """Load songs from JSON file with mtime-based in-memory cache."""
+    global _songs_cache, _songs_cache_mtime
     songs_file = _get_songs_file()
     if not songs_file.exists():
+        _songs_cache = []
+        _songs_cache_mtime = None
         return []
+    try:
+        mtime = songs_file.stat().st_mtime
+    except OSError:
+        mtime = None
+
+    if _songs_cache is not None and mtime is not None and mtime == _songs_cache_mtime:
+        # Return a shallow copy so callers can mutate filters without poisoning cache
+        return list(_songs_cache)
+
     try:
         with open(songs_file, "r") as f:
             data = json.load(f)
-            return data.get("songs", []) if isinstance(data, dict) else data
+            songs = data.get("songs", []) if isinstance(data, dict) else data
+            if not isinstance(songs, list):
+                songs = []
+            _songs_cache = songs
+            _songs_cache_mtime = mtime
+            return list(songs)
     except (json.JSONDecodeError, IOError):
         # If JSON is corrupted, try to recover from backup
         backup = songs_file.with_suffix(".json.bak")
@@ -640,7 +662,12 @@ def _load_songs() -> List[dict]:
                 with open(backup, "r") as f:
                     data = json.load(f)
                 logger.warning("Recovered songs.json from backup after corruption")
-                return data.get("songs", []) if isinstance(data, dict) else data
+                songs = data.get("songs", []) if isinstance(data, dict) else data
+                if not isinstance(songs, list):
+                    songs = []
+                _songs_cache = songs
+                _songs_cache_mtime = None
+                return list(songs)
             except Exception:
                 pass
         return []
@@ -648,6 +675,7 @@ def _load_songs() -> List[dict]:
 
 def _save_songs(songs: List[dict]):
     """Save songs to JSON file atomically to prevent corruption under concurrent access."""
+    global _songs_cache, _songs_cache_mtime
     songs_file = _get_songs_file()
     songs_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file = songs_file.with_suffix(".json.tmp")
@@ -659,6 +687,11 @@ def _save_songs(songs: List[dict]):
         if songs_file.exists():
             songs_file.replace(backup_file)
         temp_file.replace(songs_file)
+        _songs_cache = list(songs)
+        try:
+            _songs_cache_mtime = songs_file.stat().st_mtime
+        except OSError:
+            _songs_cache_mtime = None
     except Exception:
         # Clean up temp file on failure
         try:
@@ -680,13 +713,21 @@ async def list_songs(
     sort_by: str = Query("date"),
     sort_desc: bool = Query(True),
     exclude_id: Optional[str] = Query(None),
-    type: Optional[str] = Query(None, description="Filter by entry type (e.g. 'video')"),
+    type: Optional[str] = Query(None, description="Filter by entry type (e.g. 'video', 'mod')"),
 ):
-    """List all songs with filtering and sorting (flac_player compatible)."""
-    songs = _load_songs()
-    
+    """List all songs with filtering and sorting (flac_player compatible).
+
+    Pass ``type=mod`` to list tracker modules from the mods index (mod-player library).
+    """
+    # Tracker modules live in mods/index.json — not songs.json
+    if type is not None and type.lower() in ("mod", "tracker", "module"):
+        from .mod_router import mods_as_song_metadata
+        songs = mods_as_song_metadata()
+    else:
+        songs = _load_songs()
+
     # Apply filters
-    if type is not None:
+    if type is not None and type.lower() not in ("mod", "tracker", "module"):
         # "song" and null/None are equivalent — songs predate the type field.
         # Only "video" and other explicit types are stored as non-null.
         if type in ("song", "audio"):
@@ -735,9 +776,12 @@ async def list_songs(
     # Any song with a filename gets a direct static URL regardless of what's
     # stored in the url field (handles old backends, HF Space URLs, etc.).
     # Songs without a filename fall back to the /api/music/{id} proxy endpoint.
+    # Skip rewrite for tracker modules — mod_router already set correct URLs.
     base_url = str(settings.static_base_url).rstrip("/")
     api_base = str(settings.static_base_url).split("/files")[0]  # e.g. https://storage.noahcohn.com
     for song in songs:
+        if song.get("type") == "mod":
+            continue
         filename = song.get("filename")
         url = song.get("url")
         if filename:
@@ -748,7 +792,6 @@ async def list_songs(
             song["url"] = f"{api_base}/api/music/{song['id']}"
     
     # Apply pagination
-    total = len(songs)
     songs = songs[offset:offset + limit]
     
     return songs

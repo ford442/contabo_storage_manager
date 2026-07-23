@@ -37,6 +37,8 @@ MIME_MAP = {
     ".mid": "audio/midi",
     ".midi": "audio/midi",
     ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
     ".json": "application/json",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -44,6 +46,12 @@ MIME_MAP = {
     ".webp": "image/webp",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
+    # Tracker modules (mod-player)
+    ".mod": "audio/x-mod",
+    ".xm": "audio/x-xm",
+    ".s3m": "audio/x-s3m",
+    ".it": "audio/x-it",
+    ".mptm": "audio/x-mod",
 }
 
 # ====================== Helpers ======================
@@ -932,6 +940,16 @@ async def clip_stacker_media_delete(request: Request, filename: str):
 
 
 # ====================== Static File Serving ======================
+def _file_cors_headers() -> dict:
+    """Headers required for cross-origin / COEP clients (mod-player, flac_player)."""
+    return {
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": "public, max-age=3600",
+    }
+
+
 @files_router.head("/{file_path:path}", summary="HEAD for stored files")
 async def head_file(file_path: str):
     """Respond to HEAD requests so browsers can check file existence and size."""
@@ -944,14 +962,12 @@ async def head_file(file_path: str):
         raise HTTPException(status_code=404, detail="Not found")
     suffix = target.suffix.lower()
     media_type = MIME_MAP.get(suffix, "application/octet-stream")
-    return _Response(
-        status_code=200,
-        headers={
-            "Content-Length": str(target.stat().st_size),
-            "Content-Type": media_type,
-            "Accept-Ranges": "bytes",
-        },
-    )
+    headers = {
+        "Content-Length": str(target.stat().st_size),
+        "Content-Type": media_type,
+        **_file_cors_headers(),
+    }
+    return _Response(status_code=200, headers=headers)
 
 
 @files_router.get("/{file_path:path}", summary="Serve stored files with correct MIME")
@@ -970,4 +986,4 @@ async def serve_file(file_path: str):
     suffix = target.suffix.lower()
     media_type = MIME_MAP.get(suffix, "application/octet-stream")
 
-    return FileResponse(target, media_type=media_type)
+    return FileResponse(target, media_type=media_type, headers=_file_cors_headers())

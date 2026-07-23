@@ -66,10 +66,13 @@ class StorageFTPClient:
 
     def _get_ftps_connection(self):
         logger.info(f"Connecting to FTPS server {self.host}:{self.port}")
+        # Keep connect timeouts short so sync endpoints never hang the API for minutes
+        # when the remote host (e.g. storage.1ink.us) is unreachable.
         ftp = ftplib.FTP_TLS()
-        ftp.connect(self.host, self.port, timeout=30)
+        ftp.connect(self.host, self.port, timeout=10)
         ftp.login(self.user, self.password)
         ftp.prot_p()
+        ftp.sock.settimeout(30)
         return ftp
 
     def _get_sftp_connection(self):
@@ -80,7 +83,11 @@ class StorageFTPClient:
             raise
 
         logger.info(f"Connecting to SFTP server {self.host}:{self.port}")
-        transport = paramiko.Transport((self.host, self.port))
+        # Explicit socket timeout prevents multi-minute hangs when remote is down.
+        sock = socket.create_connection((self.host, self.port), timeout=10)
+        transport = paramiko.Transport(sock)
+        transport.banner_timeout = 10
+        transport.auth_timeout = 10
         transport.connect(username=self.user, password=self.password)
         try:
             transport.set_keepalive(_SFTP_KEEPALIVE_SEC)
