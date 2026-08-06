@@ -55,6 +55,7 @@ def _upload_bytes_with_retries(client: StorageFTPClient, data: bytes, target_rel
 
 _deploy_client: Optional[StorageFTPClient] = None
 _deploy_client_go: Optional[StorageFTPClient] = None
+_deploy_client_prod: Optional[StorageFTPClient] = None
 
 
 def get_deploy_client() -> StorageFTPClient:
@@ -89,6 +90,42 @@ def get_deploy_client_go() -> StorageFTPClient:
             base_dir=settings.deploy_base_dir_go,
         )
     return _deploy_client_go
+
+
+def get_deploy_client_prod() -> StorageFTPClient:
+    """Return the shared deploy client for production (projectm.1ink.us)."""
+    global _deploy_client_prod
+    if not settings.deploy_base_dir_prod:
+        raise HTTPException(status_code=400, detail="DEPLOY_BASE_DIR_PROD is not configured")
+    if _deploy_client_prod is None:
+        if not settings.deploy_host:
+            logger.warning("DEPLOY_HOST not configured - deploys will fail")
+        _deploy_client_prod = StorageFTPClient(
+            host=settings.deploy_host,
+            user=settings.deploy_user,
+            password=settings.deploy_pass,
+            port=settings.deploy_port,
+            base_dir=settings.deploy_base_dir_prod,
+        )
+    return _deploy_client_prod
+
+
+def _resolve_target_site(*vals) -> str:
+    """Normalize target_site / DEPLOY_TARGET / target form fields to test|go|prod."""
+    for v in vals:
+        if isinstance(v, str) and v.strip():
+            name = v.strip().lower()
+            if name in ("test", "go", "prod"):
+                return name
+    return "test"
+
+
+def _client_and_base_for_target(effective_target: str):
+    if effective_target == "go":
+        return get_deploy_client_go(), settings.deploy_base_dir_go
+    if effective_target == "prod":
+        return get_deploy_client_prod(), settings.deploy_base_dir_prod
+    return get_deploy_client(), settings.deploy_base_dir
 
 
 def _check_token(x_deploy_token: Optional[str], project_name: str):
@@ -133,7 +170,7 @@ async def upload_project_file(
         default=None,
         description="Optional target subfolder (supports nested paths like 'my-site' or 'sites/example.com'). Defaults to project_name.",
     ),
-    target_site: Literal["test", "go"] = Form(default="test", description="Deploy target site: 'test' (default) or 'go'."),
+    target_site: Literal["test", "go", "prod"] = Form(default="test", description="Deploy target site: 'test' (default), 'go', or 'prod'."),
     target: Optional[str] = Form(default=None, description="Alternative name for target_site (compat)."),
     deploy_target: Optional[str] = Form(default=None, description="Alternative name for target_site, e.g. DEPLOY_TARGET env var in client scripts."),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
@@ -154,32 +191,19 @@ async def upload_project_file(
         raise HTTPException(status_code=400, detail="No file provided")
 
     # Support DEPLOY_TARGET (common client var name), target, and target_site.
-    # When called directly (tests) or via FastAPI, Form(...) defaults are markers, not values.
-    def _resolve_target(*vals):
-        for v in vals:
-            if isinstance(v, str) and v.strip():
-                return v.strip().lower()
-        return "test"
-    effective_target = _resolve_target(target_site, target, deploy_target)
-    if effective_target not in ("test", "go"):
-        effective_target = "test"
+    effective_target = _resolve_target_site(target_site, target, deploy_target)
 
     try:
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Empty file upload")
 
-        if effective_target == "go":
-            base_dir = settings.deploy_base_dir_go
-            client = get_deploy_client_go()
-        else:
-            base_dir = settings.deploy_base_dir
-            client = get_deploy_client()
+        client, base_dir = _client_and_base_for_target(effective_target)
         target_rel = f"{target_prefix}/{safe_rel_path}" if safe_rel_path else target_prefix
 
         logger.info(
-            "DEPLOY file: project=%s target_prefix=%s rel_path=%s size=%d bytes",
-            project_name, target_prefix, safe_rel_path or "(root)", len(content)
+            "DEPLOY file: project=%s target=%s target_prefix=%s rel_path=%s size=%d bytes",
+            project_name, effective_target, target_prefix, safe_rel_path or "(root)", len(content)
         )
 
         _upload_bytes_with_retries(client, content, target_rel)
@@ -190,6 +214,7 @@ async def upload_project_file(
         return {
             "status": "success",
             "project": project_name,
+            "target_site": effective_target,
             "target_prefix": target_prefix,
             "rel_path": safe_rel_path,
             "size": len(content),
@@ -216,7 +241,7 @@ async def upload_project_zip(
         default=None,
         description="Optional target subfolder (supports nested paths). Defaults to project_name.",
     ),
-    target_site: Literal["test", "go"] = Form(default="test", description="Deploy target site: 'test' (default) or 'go'."),
+    target_site: Literal["test", "go", "prod"] = Form(default="test", description="Deploy target site: 'test' (default), 'go', or 'prod'."),
     target: Optional[str] = Form(default=None, description="Alternative name for target_site (compat)."),
     deploy_target: Optional[str] = Form(default=None, description="Alternative name for target_site, e.g. DEPLOY_TARGET env var in client scripts."),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
@@ -244,16 +269,7 @@ async def upload_project_zip(
     if upload is None or not upload.filename:
         raise HTTPException(status_code=400, detail="No zip archive provided. Use field 'archive', 'bundle', or 'file'.")
 
-    # Support DEPLOY_TARGET (common client var name), target, and target_site.
-    # When called directly (tests) or via FastAPI, Form(...) defaults are markers, not values.
-    def _resolve_target(*vals):
-        for v in vals:
-            if isinstance(v, str) and v.strip():
-                return v.strip().lower()
-        return "test"
-    effective_target = _resolve_target(target_site, target, deploy_target)
-    if effective_target not in ("test", "go"):
-        effective_target = "test"
+    effective_target = _resolve_target_site(target_site, target, deploy_target)
 
     try:
         raw = await upload.read()
@@ -264,8 +280,6 @@ async def upload_project_zip(
     if zip_size == 0:
         raise HTTPException(status_code=400, detail="Empty zip archive")
 
-    # Detect legacy path usage for logging
-    # (FastAPI doesn't easily expose which route matched here, so we just log the project)
     logger.info(
         "DEPLOY zip: project=%s target_prefix=%s zip_size=%d bytes target=%s (legacy /bundle path accepted if used)",
         project_name, target_prefix, zip_size, effective_target
@@ -276,12 +290,7 @@ async def upload_project_zip(
     except zipfile.BadZipFile as e:
         raise HTTPException(status_code=400, detail=f"Invalid zip file: {e}")
 
-    if effective_target == "go":
-        remote_base = settings.deploy_base_dir_go
-        client = get_deploy_client_go()
-    else:
-        remote_base = settings.deploy_base_dir
-        client = get_deploy_client()
+    client, remote_base = _client_and_base_for_target(effective_target)
     uploaded = []
     failed = []
     total_bytes = 0
@@ -320,13 +329,14 @@ async def upload_project_zip(
 
     remote_base = (remote_base or "").rstrip("/")
     logger.info(
-        "DEPLOY zip COMPLETE: project=%s target_prefix=%s uploaded=%d failed=%d total_bytes=%d -> %s/%s",
-        project_name, target_prefix, len(uploaded), len(failed), total_bytes, remote_base, target_prefix
+        "DEPLOY zip COMPLETE: project=%s target_site=%s target_prefix=%s uploaded=%d failed=%d total_bytes=%d -> %s/%s",
+        project_name, effective_target, target_prefix, len(uploaded), len(failed), total_bytes, remote_base, target_prefix
     )
 
     return {
         "status": "success" if not failed else "partial",
         "project": project_name,
+        "target_site": effective_target,
         "target_prefix": target_prefix,
         "uploaded": len(uploaded),
         "failed": failed,
@@ -346,11 +356,12 @@ async def deploy_health():
         "deploy_port": settings.deploy_port,
         "base_dir": settings.deploy_base_dir,
         "deploy_base_dir_go": settings.deploy_base_dir_go,
+        "deploy_base_dir_prod": settings.deploy_base_dir_prod,
         "has_token": bool(settings.deploy_auth_token),
         "endpoints": {
-            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder + optional target_site=test|go)",
-            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder + optional target_site=test|go) — recommended",
+            "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder + optional target_site=test|go|prod)",
+            "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder + optional target_site=test|go|prod) — recommended",
             "bundle": "POST /api/deploy/{project}/bundle (legacy alias for /zip — still works for old clients)",
         },
-        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use optional target_site=test|go (default test) or send field 'DEPLOY_TARGET' / 'target' / 'target_site'. Requires DEPLOY_BASE_DIR_GO when using 'go'. X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
+        "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use optional target_site=test|go|prod (default test) or send field 'DEPLOY_TARGET' / 'target' / 'target_site'. Requires DEPLOY_BASE_DIR_GO for 'go' and DEPLOY_BASE_DIR_PROD for 'prod' (DreamHost projectm.1ink.us parent, e.g. /home/ford442). X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
     }

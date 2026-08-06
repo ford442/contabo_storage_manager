@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     deploy_pass: Optional[str] = None
     deploy_base_dir: str = "/"
     deploy_base_dir_go: Optional[str] = None
+    # Production DreamHost docroot parent for projectm.1ink.us (e.g. /home/ford442).
+    # With target_folder=projectm.1ink.us this lands at /home/ford442/projectm.1ink.us/.
+    deploy_base_dir_prod: Optional[str] = None
     deploy_auth_token: Optional[str] = None
     flac_player_base_url: str = "https://test.1ink.us"
 

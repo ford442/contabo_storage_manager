@@ -121,6 +121,53 @@ def test_upload_project_zip_go_target_requires_config(monkeypatch):
     assert "DEPLOY_BASE_DIR_GO" in str(exc.value.detail)
 
 
+def test_upload_project_file_prod_target_requires_config(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_base_dir_prod", None)
+    monkeypatch.setattr(settings, "deploy_auth_token", None)
+    monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: pytest.fail("test client should not be used"))
+
+    upload = UploadFile(file=io.BytesIO(b"hello"), filename="index.html")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            deploy_router.upload_project_file(
+                project_name="proj",
+                file=upload,
+                rel_path="index.html",
+                target_folder=None,
+                target_site="prod",
+                x_deploy_token=None,
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "DEPLOY_BASE_DIR_PROD" in str(exc.value.detail)
+
+
+def test_upload_project_file_prod_target_uses_prod_client(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_base_dir_prod", "/home/ford442")
+    monkeypatch.setattr(settings, "deploy_auth_token", None)
+    prod_client = _DummyDeployClient()
+    monkeypatch.setattr(deploy_router, "get_deploy_client_prod", lambda: prod_client)
+    monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: pytest.fail("test client should not be used"))
+    monkeypatch.setattr(deploy_router, "get_deploy_client_go", lambda: pytest.fail("go client should not be used"))
+
+    upload = UploadFile(file=io.BytesIO(b"hello"), filename="index.html")
+    result = asyncio.run(
+        deploy_router.upload_project_file(
+            project_name="project-m",
+            file=upload,
+            rel_path="1ink.1ink",
+            target_folder="projectm.1ink.us",
+            target_site="prod",
+            x_deploy_token=None,
+        )
+    )
+
+    assert prod_client.uploads == [(b"hello", "projectm.1ink.us/1ink.1ink")]
+    assert result["target"] == "/home/ford442/projectm.1ink.us/1ink.1ink"
+    assert result["target_site"] == "prod"
+
+
 def test_upload_bytes_with_retries_recovers_after_transient_error(monkeypatch):
     attempts = {"n": 0}
 
