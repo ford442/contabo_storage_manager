@@ -145,6 +145,11 @@ def test_songs_type_mod(mods_env):
     assert len(data) >= 2
     assert all(s.get("type") == "mod" for s in data)
     assert all(s.get("url") for s in data)
+    # FastAPI must not strip mod_router aliases (mod-player RemoteSong).
+    assert all(s.get("download_url") for s in data)
+    assert all(s.get("downloadUrl") == s.get("download_url") for s in data)
+    assert all(s.get("filename") for s in data)
+    assert all(s.get("fileName") == s.get("filename") for s in data)
 
 
 def test_scan_post_and_get(mods_env):

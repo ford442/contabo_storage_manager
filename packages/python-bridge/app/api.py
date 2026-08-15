@@ -573,7 +573,12 @@ async def record_image(record: ImageRecord):
 # ====================== FLAC Player Song API ======================
 
 class SongMetadata(BaseModel):
-    """Song metadata model matching flac_player expectations."""
+    """Song metadata model matching flac_player expectations.
+
+    Extra fields (download_url, fileName, artist, …) are allowed so
+    ``/api/songs?type=mod`` can pass through mod_router aliases used by
+    the tracker player. Without extra=allow FastAPI strips those keys.
+    """
     id: str
     name: str
     title: Optional[str] = None
@@ -590,6 +595,7 @@ class SongMetadata(BaseModel):
     size: Optional[int] = None
     filename: Optional[str] = None
     type: Optional[str] = None
+    model_config = {"extra": "allow"}
 
 
 class SongStats(BaseModel):
@@ -717,7 +723,8 @@ async def list_songs(
 ):
     """List all songs with filtering and sorting (flac_player compatible).
 
-    Pass ``type=mod`` to list tracker modules from the mods index (mod-player library).
+    Default (no type) is the FLAC/MP3 catalog from songs.json.
+    Pass ``type=mod`` to list tracker modules from the mods index (mod-player).
     """
     # Tracker modules live in mods/index.json — not songs.json
     if type is not None and type.lower() in ("mod", "tracker", "module"):
