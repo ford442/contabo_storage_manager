@@ -607,7 +607,7 @@ async def clip_stacker_options():
         status_code=204,
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Max-Age": "86400",
         }
@@ -725,8 +725,10 @@ async def clip_stacker_load(request: Request, name: str = None):
     try:
         project_file_resolved = project_file.resolve()
         projects_dir_resolved = projects_dir.resolve()
-        if not str(project_file_resolved).startswith(str(projects_dir_resolved)):
+        if not project_file_resolved.is_relative_to(projects_dir_resolved):
             raise HTTPException(status_code=403, detail="Forbidden")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -767,8 +769,10 @@ async def clip_stacker_delete(request: Request, name: str = None, deleteMedia: b
     try:
         project_file_resolved = project_file.resolve()
         projects_dir_resolved = projects_dir.resolve()
-        if not str(project_file_resolved).startswith(str(projects_dir_resolved)):
+        if not project_file_resolved.is_relative_to(projects_dir_resolved):
             raise HTTPException(status_code=403, detail="Forbidden")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -812,7 +816,7 @@ async def clip_stacker_media_options():
         status_code=204,
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, HEAD",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Max-Age": "86400",
         }
@@ -836,13 +840,37 @@ async def clip_stacker_media_upload(
         "url": "https://storage.example.com/files/clip-stacker/media/..."
     }
     """
-    rel_dir = "clip-stacker/media"
-    result = await _save_upload(file, rel_dir)
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
+
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    media_dir = Path(settings.files_dir) / "clip-stacker" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    dest = media_dir / safe_name
+    try:
+        if not dest.resolve().is_relative_to(media_dir.resolve()):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    content = await file.read()
+    dest.write_bytes(content)
+
+    rel_path = f"clip-stacker/media/{safe_name}"
+    try:
+        await ftp_client.upload(dest, rel_path)
+    except Exception as exc:
+        logger.warning("FTP upload failed for clip-stacker media (non-fatal): %s", exc)
 
     base_url = str(settings.static_base_url).rstrip("/")
-    public_url = f"{base_url}/{result['local_path']}"
+    public_url = f"{base_url}/{rel_path}"
 
-    return {"url": public_url, "local_path": result["local_path"], "size_bytes": result.get("size_bytes", 0)}
+    return {"url": public_url, "local_path": rel_path, "size_bytes": dest.stat().st_size}
 
 
 @webhook_router.get("/clip-stacker/media", response_model=dict)
@@ -878,7 +906,7 @@ async def clip_stacker_media_list(request: Request, prefix: str = None):
             
             size_bytes = file_path.stat().st_size
             base_url = str(settings.static_base_url).rstrip("/")
-            public_url = f"{base_url}/files/clip-stacker/media/{filename}"
+            public_url = f"{base_url}/clip-stacker/media/{filename}"
             
             media_files.append({
                 "name": filename,

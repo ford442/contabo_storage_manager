@@ -1,17 +1,7 @@
 import json
 from pathlib import Path
 
-import pytest
-from fastapi.testclient import TestClient
-
-# Assuming your FastAPI app is imported like this
-from app.main import app  # Adjust import as needed
-
-
-@pytest.fixture
-def client(temp_files_dir):
-    """Provide a test client with the app."""
-    return TestClient(app)
+from app.main import app  # noqa: F401  (imported via conftest path setup)
 
 
 # =============================================================================
@@ -163,7 +153,10 @@ def test_clip_stacker_media_upload(client, temp_files_dir):
         data={"name": "test-video.mp4"},
     )
     assert response.status_code == 200
-    assert "url" in response.json()
+    data = response.json()
+    assert "url" in data
+    assert data["url"].endswith("/clip-stacker/media/test-video.mp4")
+    assert "/files/files/" not in data["url"]
 
 
 def test_clip_stacker_media_list(client, temp_files_dir):
@@ -177,7 +170,10 @@ def test_clip_stacker_media_list(client, temp_files_dir):
 
     # No filter
     response = client.get("/webhook/clip-stacker/media")
-    assert len(response.json()["media"]) == 3
+    listed = response.json()["media"]
+    assert len(listed) == 3
+    assert all("/files/files/" not in item["url"] for item in listed)
+    assert all("/clip-stacker/media/" in item["url"] for item in listed)
 
     # With prefix filter
     response = client.get("/webhook/clip-stacker/media", params={"prefix": "clip-123"})
@@ -200,7 +196,9 @@ def test_clip_stacker_media_delete_prevents_path_traversal(client):
     """Test path traversal protection on media delete."""
     for malicious_name in ["../file.mp4", "..\\file.mp4"]:
         response = client.delete(f"/webhook/clip-stacker/media/{malicious_name}")
-        assert response.status_code == 400
+        # Starlette collapses "/" traversal to a different route (404).
+        # Backslash / leftover ".." is rejected by the handler (400).
+        assert response.status_code in (400, 404)
 
 
 def test_clip_stacker_delete_project_with_media_cleanup(client, temp_files_dir):

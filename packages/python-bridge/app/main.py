@@ -286,7 +286,7 @@ async def add_cors_headers(request: Request, call_next):
         if is_allowed and allow_origin:
             headers = {
                 "Access-Control-Allow-Origin": allow_origin,
-                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS, PUT",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
                 "Access-Control-Max-Age": "86400",
             }

@@ -194,6 +194,91 @@ class StorageFTPClient:
     # Upload
     # ------------------------------------------------------------------
 
+    def remote_file_size(self, remote_rel_path: str) -> Optional[int]:
+        """Return the remote file size in bytes, or None if missing/unreadable."""
+        if not self.host or not self.user or not self.password:
+            return None
+        try:
+            conn = self._ensure_connected()
+            target_file = f"{self.base_dir.rstrip('/')}/{remote_rel_path.lstrip('/')}"
+            if hasattr(conn, "stat") and not hasattr(conn, "storbinary"):
+                return int(conn.stat(target_file).st_size)
+            size = conn.size(target_file)
+            return int(size) if size is not None else None
+        except Exception:
+            return None
+
+    def list_file_sizes(self, rel_dir: str) -> dict[str, int]:
+        """Return {relative_path: size} for every file under rel_dir.
+
+        Paths are relative to rel_dir (posix), matching zip entry names.
+        Missing remote directories return an empty dict.
+        """
+        if not self.host or not self.user or not self.password:
+            return {}
+
+        conn = self._ensure_connected()
+        root = f"{self.base_dir.rstrip('/')}/{rel_dir.strip('/')}" if rel_dir.strip("/") else self.base_dir.rstrip("/")
+        sizes: dict[str, int] = {}
+
+        try:
+            if hasattr(conn, "listdir_attr"):
+                self._walk_sftp_sizes(conn, root, "", sizes)
+            else:
+                self._walk_ftps_sizes(conn, root, "", sizes)
+        except (ftplib.error_perm, IOError, OSError, FileNotFoundError):
+            return {}
+        return sizes
+
+    def _walk_sftp_sizes(self, sftp, current: str, prefix: str, out: dict[str, int]) -> None:
+        import stat as statmod
+
+        for attr in sftp.listdir_attr(current):
+            name = attr.filename
+            if name in (".", ".."):
+                continue
+            remote = f"{current}/{name}"
+            rel = f"{prefix}/{name}" if prefix else name
+            mode = attr.st_mode or 0
+            if statmod.S_ISDIR(mode):
+                self._walk_sftp_sizes(sftp, remote, rel, out)
+            else:
+                out[rel.replace("\\", "/")] = int(attr.st_size or 0)
+
+    def _walk_ftps_sizes(self, ftp, current: str, prefix: str, out: dict[str, int]) -> None:
+        try:
+            entries = list(ftp.mlsd(current))
+            use_mlsd = True
+        except Exception:
+            ftp.cwd(current)
+            entries = [(name, {}) for name in ftp.nlst()]
+            use_mlsd = False
+
+        for name, facts in entries:
+            if name in (".", ".."):
+                continue
+            remote = f"{current}/{name}"
+            rel = f"{prefix}/{name}" if prefix else name
+            is_dir = (facts.get("type") == "dir") if use_mlsd else False
+            if not use_mlsd:
+                try:
+                    ftp.cwd(remote)
+                    ftp.cwd(current)
+                    is_dir = True
+                except Exception:
+                    is_dir = False
+            if is_dir:
+                self._walk_ftps_sizes(ftp, remote, rel, out)
+                continue
+            size = facts.get("size") if use_mlsd else None
+            if size is None:
+                try:
+                    size = ftp.size(remote)
+                except Exception:
+                    size = None
+            if size is not None:
+                out[rel.replace("\\", "/")] = int(size)
+
     def upload_bytes(self, data: bytes, remote_rel_path: str) -> bool:
         """Upload raw bytes to the remote server. Raises on failure."""
         if not self.host:

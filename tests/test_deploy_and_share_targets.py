@@ -20,11 +20,22 @@ from app.config import settings
 
 
 class _DummyDeployClient:
-    def __init__(self):
+    def __init__(self, remote_sizes=None):
         self.uploads = []
+        self.remote_sizes = dict(remote_sizes or {})
 
     def upload_bytes(self, content: bytes, target_rel: str):
         self.uploads.append((content, target_rel))
+        # After upload, remote size matches what we just sent
+        rel = target_rel.split("/", 1)[1] if "/" in target_rel else target_rel
+        self.remote_sizes[rel] = len(content)
+
+    def remote_file_size(self, remote_rel_path: str):
+        rel = remote_rel_path.split("/", 1)[1] if "/" in remote_rel_path else remote_rel_path
+        return self.remote_sizes.get(rel)
+
+    def list_file_sizes(self, rel_dir: str):
+        return dict(self.remote_sizes)
 
 
 def _zip_upload(filename: str = "bundle.zip", payload_name: str = "index.html", payload: bytes = b"zip-data") -> UploadFile:
@@ -183,6 +194,71 @@ def test_upload_bytes_with_retries_recovers_after_transient_error(monkeypatch):
 
     deploy_router._upload_bytes_with_retries(_FlakyClient(), b"x", "proj/a.txt")
     assert attempts["n"] == 2
+
+
+def test_upload_project_zip_skips_identical_size(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_base_dir", "/var/www/test.1ink.us")
+    monkeypatch.setattr(settings, "deploy_auth_token", None)
+    client = _DummyDeployClient(remote_sizes={"index.html": len(b"zip-data")})
+    monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: client)
+
+    result = asyncio.run(
+        deploy_router.upload_project_zip(
+            project_name="proj",
+            archive=_zip_upload(),
+            bundle=None,
+            file=None,
+            zipfile_upload=None,
+            target_folder=None,
+            x_deploy_token=None,
+        )
+    )
+
+    assert client.uploads == []
+    assert result["uploaded"] == 0
+    assert result["skipped"] == 1
+    assert result["skipped_files"] == ["index.html"]
+
+
+def test_upload_project_file_skips_identical_size(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_base_dir", "/var/www/test.1ink.us")
+    monkeypatch.setattr(settings, "deploy_auth_token", None)
+    client = _DummyDeployClient(remote_sizes={"index.html": 5})
+    monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: client)
+
+    upload = UploadFile(file=io.BytesIO(b"hello"), filename="index.html")
+    result = asyncio.run(
+        deploy_router.upload_project_file(
+            project_name="proj",
+            file=upload,
+            rel_path="index.html",
+            target_folder=None,
+            x_deploy_token=None,
+        )
+    )
+
+    assert client.uploads == []
+    assert result["skipped"] is True
+    assert result["size"] == 5
+
+
+def test_list_project_remote_sizes(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_base_dir", "/var/www/test.1ink.us")
+    monkeypatch.setattr(settings, "deploy_auth_token", None)
+    client = _DummyDeployClient(remote_sizes={"js/app.js": 42, "index.html": 9})
+    monkeypatch.setattr(deploy_router, "get_deploy_client", lambda: client)
+
+    result = asyncio.run(
+        deploy_router.list_project_remote_sizes(
+            project_name="proj",
+            target_folder=None,
+            x_deploy_token=None,
+        )
+    )
+
+    assert result["count"] == 2
+    assert result["files"]["js/app.js"] == 42
+    assert result["target_prefix"] == "proj"
 
 
 def test_share_urls_use_flac_player_base_url(monkeypatch):

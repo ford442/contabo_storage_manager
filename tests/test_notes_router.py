@@ -116,8 +116,8 @@ class TestNotesAPI:
             "/api/notes/write/../etc-passwd",
             json={"content": "malicious"},
         )
-        # Should either reject with 400 or slug the name safely
-        assert response.status_code in [200, 400]
+        # Starlette may normalize ".." in the URL (404). Otherwise reject or slug safely.
+        assert response.status_code in [200, 400, 404]
         if response.status_code == 200:
             # If it succeeds, verify the name is slugified and safe
             name = response.json()["name"]

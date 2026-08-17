@@ -55,3 +55,20 @@ def test_preflight_rejects_unknown_origin():
     )
 
     assert response.status_code == 400
+
+
+def test_app_preflight_allows_patch():
+    from app.main import app
+
+    response = TestClient(app).options(
+        "/api/songs/abc",
+        headers={
+            "Origin": "https://test.1ink.us",
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 204
+    methods = response.headers.get("access-control-allow-methods", "")
+    assert "PATCH" in methods

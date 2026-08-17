@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from aiocache import Cache
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_BRIDGE_PATH = ROOT / "packages" / "python-bridge"
@@ -81,7 +81,10 @@ def mock_storage(monkeypatch):
 
 @pytest.fixture
 async def client(mock_storage):
-    async with AsyncClient(app=api_full.app, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=api_full.app),
+        base_url="http://test",
+    ) as client:
         yield client
 
 

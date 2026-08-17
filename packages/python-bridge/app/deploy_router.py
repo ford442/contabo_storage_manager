@@ -161,6 +161,15 @@ def _sanitize_target_folder(raw: Optional[str]) -> Optional[str]:
         raise
 
 
+def _remote_size_map(client: StorageFTPClient, target_prefix: str) -> dict[str, int]:
+    """Best-effort remote size index. Missing dirs / listing errors → empty map (upload all)."""
+    try:
+        return client.list_file_sizes(target_prefix) or {}
+    except Exception as exc:
+        logger.warning("DEPLOY size listing failed for %s: %s", target_prefix, exc)
+        return {}
+
+
 @router.post("/{project_name}/file")
 async def upload_project_file(
     project_name: str,
@@ -200,16 +209,32 @@ async def upload_project_file(
 
         client, base_dir = _client_and_base_for_target(effective_target)
         target_rel = f"{target_prefix}/{safe_rel_path}" if safe_rel_path else target_prefix
+        content_len = len(content)
 
         logger.info(
             "DEPLOY file: project=%s target=%s target_prefix=%s rel_path=%s size=%d bytes",
-            project_name, effective_target, target_prefix, safe_rel_path or "(root)", len(content)
+            project_name, effective_target, target_prefix, safe_rel_path or "(root)", content_len
         )
 
-        _upload_bytes_with_retries(client, content, target_rel)
+        skipped = False
+        try:
+            remote_size = client.remote_file_size(target_rel)
+        except Exception:
+            remote_size = None
+        if remote_size is not None and remote_size == content_len:
+            skipped = True
+            logger.info("DEPLOY file SKIP same-size: %s (%d bytes)", target_rel, content_len)
+        else:
+            _upload_bytes_with_retries(client, content, target_rel)
 
         remote_target = f"{base_dir or ''}/{target_rel}".replace("//", "/")
-        logger.info("DEPLOY file OK: %s (%d bytes) -> %s", target_rel, len(content), remote_target)
+        logger.info(
+            "DEPLOY file %s: %s (%d bytes) -> %s",
+            "SKIP" if skipped else "OK",
+            target_rel,
+            content_len,
+            remote_target,
+        )
 
         return {
             "status": "success",
@@ -217,7 +242,8 @@ async def upload_project_file(
             "target_site": effective_target,
             "target_prefix": target_prefix,
             "rel_path": safe_rel_path,
-            "size": len(content),
+            "size": content_len,
+            "skipped": skipped,
             "target": remote_target,
         }
 
@@ -291,7 +317,9 @@ async def upload_project_zip(
         raise HTTPException(status_code=400, detail=f"Invalid zip file: {e}")
 
     client, remote_base = _client_and_base_for_target(effective_target)
+    remote_sizes = _remote_size_map(client, target_prefix)
     uploaded = []
+    skipped = []
     failed = []
     total_bytes = 0
 
@@ -309,13 +337,17 @@ async def upload_project_zip(
             failed.append({"path": zip_entry.filename, "error": "unsafe path (traversal or invalid chars)"})
             continue
 
-        safe_rel = str(Path(*safe_parts))
+        safe_rel = str(Path(*safe_parts)).replace("\\", "/")
         target_rel = f"{target_prefix}/{safe_rel}"
 
         try:
             data = zf.read(zip_entry.filename)
             data_len = len(data)
             total_bytes += data_len
+            if remote_sizes.get(safe_rel) == data_len:
+                skipped.append(safe_rel)
+                logger.debug("DEPLOY zip entry SKIP same-size: %s (%d bytes)", target_rel, data_len)
+                continue
             _upload_bytes_with_retries(client, data, target_rel)
             uploaded.append(safe_rel)
             logger.debug("DEPLOY zip entry OK: %s (%d bytes)", target_rel, data_len)
@@ -323,14 +355,14 @@ async def upload_project_zip(
             logger.error("DEPLOY zip entry failed: %s (%s)", target_rel, e)
             failed.append({"path": safe_rel, "error": str(e)})
 
-    if failed and not uploaded:
+    if failed and not uploaded and not skipped:
         logger.error("DEPLOY zip: ALL files failed for project=%s (%d failed)", project_name, len(failed))
         raise HTTPException(status_code=500, detail={"message": "All files failed to upload", "failed": failed})
 
     remote_base = (remote_base or "").rstrip("/")
     logger.info(
-        "DEPLOY zip COMPLETE: project=%s target_site=%s target_prefix=%s uploaded=%d failed=%d total_bytes=%d -> %s/%s",
-        project_name, effective_target, target_prefix, len(uploaded), len(failed), total_bytes, remote_base, target_prefix
+        "DEPLOY zip COMPLETE: project=%s target_site=%s target_prefix=%s uploaded=%d skipped=%d failed=%d total_bytes=%d -> %s/%s",
+        project_name, effective_target, target_prefix, len(uploaded), len(skipped), len(failed), total_bytes, remote_base, target_prefix
     )
 
     return {
@@ -339,10 +371,45 @@ async def upload_project_zip(
         "target_site": effective_target,
         "target_prefix": target_prefix,
         "uploaded": len(uploaded),
+        "skipped": len(skipped),
         "failed": failed,
         "files": uploaded,
+        "skipped_files": skipped,
         "total_bytes": total_bytes,
         "zip_size": zip_size,
+    }
+
+
+@router.get("/{project_name}/sizes")
+async def list_project_remote_sizes(
+    project_name: str,
+    target_folder: Optional[str] = None,
+    target_site: Literal["test", "go", "prod"] = "test",
+    target: Optional[str] = None,
+    deploy_target: Optional[str] = None,
+    x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
+):
+    """Return {relative_path: size} for files already on the deploy target.
+
+    Clients use this to omit unchanged (same-byte-size) files from the zip.
+    Old deploy.py scripts that skip this call still work; the zip handler also
+    skips same-size files on the VPS→FTP hop.
+    """
+    _check_token(x_deploy_token, project_name)
+    project_name = _sanitize_path(project_name)
+    target_prefix = _sanitize_target_folder(target_folder) or project_name
+    effective_target = _resolve_target_site(target_site, target, deploy_target)
+
+    client, remote_base = _client_and_base_for_target(effective_target)
+    files = _remote_size_map(client, target_prefix)
+    return {
+        "status": "ok",
+        "project": project_name,
+        "target_site": effective_target,
+        "target_prefix": target_prefix,
+        "count": len(files),
+        "files": files,
+        "base": (remote_base or "").rstrip("/"),
     }
 
 
@@ -362,6 +429,7 @@ async def deploy_health():
             "file": "POST /api/deploy/{project}/file  (file + rel_path + optional target_folder + optional target_site=test|go|prod)",
             "zip": "POST /api/deploy/{project}/zip   (archive + optional target_folder + optional target_site=test|go|prod) — recommended",
             "bundle": "POST /api/deploy/{project}/bundle (legacy alias for /zip — still works for old clients)",
+            "sizes": "GET /api/deploy/{project}/sizes?target_site=test|go|prod&target_folder=...  — remote {path: bytes} map for client-side zip skip",
         },
         "message": "Centralized deploys. Credentials live only on the VPS. Both /zip and legacy /bundle paths are supported. Use optional target_site=test|go|prod (default test) or send field 'DEPLOY_TARGET' / 'target' / 'target_site'. Requires DEPLOY_BASE_DIR_GO for 'go' and DEPLOY_BASE_DIR_PROD for 'prod' (DreamHost projectm.1ink.us parent, e.g. /home/ford442). X-Deploy-Token header when DEPLOY_AUTH_TOKEN is set.",
     }
