@@ -16,7 +16,7 @@ with explicit overrides so the internal FTP vs deploy target can differ.
 
 import io
 import zipfile
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Query
 from typing import Optional, Literal
 from pathlib import Path
 
@@ -270,6 +270,15 @@ async def upload_project_zip(
     target_site: Literal["test", "go", "prod"] = Form(default="test", description="Deploy target site: 'test' (default), 'go', or 'prod'."),
     target: Optional[str] = Form(default=None, description="Alternative name for target_site (compat)."),
     deploy_target: Optional[str] = Form(default=None, description="Alternative name for target_site, e.g. DEPLOY_TARGET env var in client scripts."),
+    force: Optional[str] = Form(
+        default=None,
+        description="If '1'/'true'/'yes', upload every zip entry even when remote size matches.",
+    ),
+    force_q: Optional[str] = Query(
+        default=None,
+        alias="force_upload",
+        description="Query-string override for force upload (same values as form force).",
+    ),
     x_deploy_token: Optional[str] = Header(default=None, alias="X-Deploy-Token"),
 ):
     """
@@ -317,7 +326,10 @@ async def upload_project_zip(
         raise HTTPException(status_code=400, detail=f"Invalid zip file: {e}")
 
     client, remote_base = _client_and_base_for_target(effective_target)
-    remote_sizes = _remote_size_map(client, target_prefix)
+    force_raw = force or force_q or ""
+    force_upload = force_raw.strip().lower() in ("1", "true", "yes")
+    logger.info("DEPLOY zip force_upload=%s (form=%r query=%r)", force_upload, force, force_q)
+    remote_sizes = {} if force_upload else _remote_size_map(client, target_prefix)
     uploaded = []
     skipped = []
     failed = []
@@ -344,7 +356,7 @@ async def upload_project_zip(
             data = zf.read(zip_entry.filename)
             data_len = len(data)
             total_bytes += data_len
-            if remote_sizes.get(safe_rel) == data_len:
+            if not force_upload and remote_sizes.get(safe_rel) == data_len:
                 skipped.append(safe_rel)
                 logger.debug("DEPLOY zip entry SKIP same-size: %s (%d bytes)", target_rel, data_len)
                 continue
