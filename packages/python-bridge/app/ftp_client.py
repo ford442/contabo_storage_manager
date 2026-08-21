@@ -84,10 +84,11 @@ class StorageFTPClient:
 
         logger.info(f"Connecting to SFTP server {self.host}:{self.port}")
         # Explicit socket timeout prevents multi-minute hangs when remote is down.
-        sock = socket.create_connection((self.host, self.port), timeout=10)
+        # Use 30s — DreamHost SSH can be slow after rate-limit cooldowns.
+        sock = socket.create_connection((self.host, self.port), timeout=30)
         transport = paramiko.Transport(sock)
-        transport.banner_timeout = 10
-        transport.auth_timeout = 10
+        transport.banner_timeout = 30
+        transport.auth_timeout = 30
         transport.connect(username=self.user, password=self.password)
         try:
             transport.set_keepalive(_SFTP_KEEPALIVE_SEC)
@@ -413,6 +414,99 @@ class StorageFTPClient:
 
         logger.info("Sync %s: %d downloaded, %d skipped, %d removed, %d errors, %d total",
                     remote_rel_dir, result["downloaded"], result["skipped"], result["removed"], result["errors"], result["total"])
+        return result
+
+    def sync_dir_to_remote(
+        self,
+        local_dir: Path,
+        remote_rel_dir: str,
+        extensions: tuple[str, ...] = (),
+    ) -> dict:
+        """Upload local files to the remote mirror, skipping identical sizes."""
+        result = {"uploaded": 0, "skipped": 0, "errors": 0, "total": 0}
+
+        if not self.host or not self.user or not self.password:
+            logger.warning("FTP push skipped: credentials not configured")
+            return result
+
+        local_dir = Path(local_dir)
+        if not local_dir.is_dir():
+            logger.warning("FTP push skipped: local dir missing %s", local_dir)
+            return result
+
+        local_files = [
+            p for p in local_dir.iterdir()
+            if p.is_file() and (
+                not extensions or any(p.name.lower().endswith(ext.lower()) for ext in extensions)
+            )
+        ]
+        result["total"] = len(local_files)
+        if not local_files:
+            return result
+
+        remote_dir = f"{self.base_dir.rstrip('/')}/{remote_rel_dir.lstrip('/')}"
+
+        try:
+            conn = self._ensure_connected()
+            is_sftp = hasattr(conn, "listdir") and not hasattr(conn, "storbinary")
+            self._ensure_base_dir(conn)
+            self._ensure_remote_dir(conn, remote_rel_dir.lstrip("/"))
+
+            remote_sizes: dict[str, int] = {}
+            try:
+                if is_sftp:
+                    for entry in conn.listdir_attr(remote_dir):
+                        if extensions and not any(entry.filename.lower().endswith(ext.lower()) for ext in extensions):
+                            continue
+                        remote_sizes[entry.filename] = int(entry.st_size)
+                else:
+                    conn.cwd(remote_dir)
+                    for entry in conn.nlst():
+                        if extensions and not any(entry.lower().endswith(ext.lower()) for ext in extensions):
+                            continue
+                        try:
+                            size = conn.size(entry)
+                            if size is not None:
+                                remote_sizes[entry] = int(size)
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.info("Remote dir %s empty or unreadable (%s); uploading all", remote_rel_dir, exc)
+
+            for local_path in local_files:
+                filename = local_path.name
+                local_size = local_path.stat().st_size
+                if remote_sizes.get(filename) == local_size:
+                    result["skipped"] += 1
+                    continue
+
+                remote_path = f"{remote_dir}/{filename}"
+                try:
+                    logger.info("Uploading %s -> %s", filename, remote_rel_dir)
+                    if is_sftp:
+                        conn.put(str(local_path), remote_path)
+                    else:
+                        with local_path.open("rb") as f:
+                            conn.storbinary(f"STOR {filename}", f)
+                    result["uploaded"] += 1
+                except Exception as exc:
+                    logger.error("Failed to upload %s: %s", filename, exc)
+                    result["errors"] += 1
+                    self._close_conn()
+                    conn = self._ensure_connected()
+                    is_sftp = hasattr(conn, "listdir") and not hasattr(conn, "storbinary")
+        except Exception as exc:
+            logger.error("FTP push failed for %s: %s", remote_rel_dir, exc)
+            result["errors"] += 1
+
+        logger.info(
+            "Push %s: %d uploaded, %d skipped, %d errors, %d total",
+            remote_rel_dir,
+            result["uploaded"],
+            result["skipped"],
+            result["errors"],
+            result["total"],
+        )
         return result
 
     def sync_mods_from_remote(self, local_dir: Path) -> dict:
