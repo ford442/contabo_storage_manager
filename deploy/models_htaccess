@@ -26,10 +26,22 @@ Header unset Accept-Ranges
 Header always unset Accept-Ranges
 Header always set Accept-Ranges "bytes"
 
-# CORS — browser needs this to fetch from a different origin
+# CORS — unset panel/parent copies first (onsuccess + always tables).
+# Without this, browsers see Access-Control-Allow-Origin: *, *
+Header unset Access-Control-Allow-Origin
+Header always unset Access-Control-Allow-Origin
 Header always set Access-Control-Allow-Origin "*"
+
+Header unset Access-Control-Allow-Methods
+Header always unset Access-Control-Allow-Methods
 Header always set Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+
+Header unset Access-Control-Allow-Headers
+Header always unset Access-Control-Allow-Headers
 Header always set Access-Control-Allow-Headers "Range, Accept-Ranges, Content-Range, Cache-Control"
+
+Header unset Access-Control-Expose-Headers
+Header always unset Access-Control-Expose-Headers
 Header always set Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges"
 
 # Cache — model weights are immutable once uploaded

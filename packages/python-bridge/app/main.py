@@ -253,7 +253,28 @@ async def leaderboard_redirect(request: Request):
 # Global CORS response handler - adds headers only when missing so we don't
 # duplicate values already set by CORSMiddleware. Mirrors the same whitelist
 # logic to avoid reflecting arbitrary origins or forcing credentials.
+# Public HTTPS nginx still proxy_hide_header + add_header so ACAO is never "*, *".
 import re as _re
+
+
+def _acao_tokens(headers) -> list[str]:
+    """Split all ACAO header values into individual origin tokens."""
+    raw = []
+    getlist = getattr(headers, "getlist", None)
+    if callable(getlist):
+        raw = getlist("access-control-allow-origin")
+    elif "access-control-allow-origin" in headers:
+        raw = [headers["access-control-allow-origin"]]
+    tokens: list[str] = []
+    for item in raw:
+        tokens.extend(part.strip() for part in item.split(",") if part.strip())
+    return tokens
+
+
+def _set_single_acao(headers, value: str) -> None:
+    """Write exactly one Access-Control-Allow-Origin token (never '*, *')."""
+    headers["Access-Control-Allow-Origin"] = value
+
 
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
@@ -261,6 +282,7 @@ async def add_cors_headers(request: Request, call_next):
     
     Responds to OPTIONS preflight requests and adds CORS headers to all responses.
     This handles /webhook/* endpoints which may be called directly from browsers.
+    Never emits more than one ACAO value.
     """
     # Handle OPTIONS preflight requests
     if request.method == "OPTIONS":
@@ -296,7 +318,13 @@ async def add_cors_headers(request: Request, call_next):
     # Process the actual request
     response = await call_next(request)
     origin = request.headers.get("origin")
-    if not origin or "access-control-allow-origin" in response.headers:
+    if not origin:
+        return response
+
+    tokens = _acao_tokens(response.headers)
+    if tokens:
+        if len(tokens) != 1:
+            _set_single_acao(response.headers, tokens[0])
         return response
 
     allowed = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
@@ -304,7 +332,7 @@ async def add_cors_headers(request: Request, call_next):
 
     # Handle wildcard (*) — allow any origin, but never send credentials with it
     if "*" in allowed:
-        response.headers["Access-Control-Allow-Origin"] = "*"
+        _set_single_acao(response.headers, "*")
         response.headers["Vary"] = "Origin"
         return response
 
@@ -313,7 +341,7 @@ async def add_cors_headers(request: Request, call_next):
         is_allowed = bool(_re.match(regex, origin))
 
     if is_allowed:
-        response.headers["Access-Control-Allow-Origin"] = origin
+        _set_single_acao(response.headers, origin)
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
     return response
