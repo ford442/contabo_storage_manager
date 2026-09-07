@@ -52,6 +52,15 @@ Check server logs after triggering it.
 | `packages/python-bridge/app/main.py` | FastAPI app, router registration order |
 | `config/storage.noahcohn.com.conf` | Nginx — proxies `/api/` to :8000, serves `/files/` statically |
 
+## Known issues / blockers
+
+(from a doc-freshness pass, 2026-09-07 — this file was 129 days stale relative to the code)
+
+- `pyproject.toml`'s `dependencies` list is missing most of what the app actually imports (paramiko, asyncssh, jinja2, google-cloud-storage, watchdog, pydub, aiocache, gunicorn). `pip install -e .` alone will not get you a working dev environment — you also need `pip install -r packages/python-bridge/requirements.txt`.
+- There are three parallel API implementations in `packages/python-bridge/app/`: `api.py` (the one actually wired into `main.py`), `api_full.py` (a separate GCS-backed app, not registered in `main.py` but still getting fixes and has its own test file), and `api_simple.py`/`api_shim.py` (an abandoned third attempt, imported by nothing). If you're touching song/API logic, make sure you're editing `api.py` — it's easy to end up in one of the other two by mistake.
+- `deploy_router.py` (`/api/deploy`) is live in `main.py` but not documented in AGENTS.md's endpoint list.
+- `/webhook/flac` and `/webhook/sequencer` in `webhooks.py` have unfinished handling (no `save_playlist`/`save_metadata`/`save_project` JSON support — see `TODO`s at `webhooks.py:358` and `:398`), and two dead `api.py.backup*` files sit unused in `app/`. Full detail in AGENTS.md's "Known Issues / Blockers".
+
 ## Things that break the integration
 
 - Changing `static_base_url` in `config.py` without updating nginx alias path

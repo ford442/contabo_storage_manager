@@ -546,7 +546,19 @@ curl -X POST http://localhost:8000/webhook/flac \
 
 ---
 
-## Deployment
+## Known Issues / Blockers
+
+Found during a doc-freshness pass (2026-09-07) — this file was 106 days stale relative to the code. Verified against the current tree, not carried over from old notes:
+
+- **`pyproject.toml`'s `[project.dependencies]` only lists 8 packages** (fastapi, uvicorn, python-dotenv, pydantic, pydantic-settings, aiofiles, httpx, python-multipart) — it's missing `paramiko`, `asyncssh`, `jinja2`, `google-cloud-storage`, `watchdog`, `pydub`, `aiocache`, `gunicorn`, all of which the app actually imports (see Technology Stack above). Following this doc's own "Testing Instructions" (`pip install -e ".[dev]"`) will not install these — you also need `pip install -r packages/python-bridge/requirements.txt`, which isn't mentioned in that section. Worth either fixing `pyproject.toml` to match `requirements.txt` or documenting that both installs are required.
+- **Three competing implementations of the API router now exist**: `api.py` (registered in `main.py`, the live one), `api_full.py` (a separate standalone app with its own `AssetService`/GCS bucket logic — not registered in `main.py`, but still actively maintained: it got a routing-order fix in commit `f7d19f7` and has its own test file `tests/test_storage_manager.py`), and `api_simple.py`/`api_shim.py` (a third, simplified variant — `api_shim.py`'s own top-of-file comment says it exists because "the full app has too many GCS dependencies that may not be configured," but neither shim nor simple is imported anywhere, including each other's would-be caller). It's not obvious from the code alone which of the three is meant to be canonical going forward vs. abandoned — worth resolving before adding more storage endpoints.
+- **`deploy_router.py` (`/api/deploy`) is registered in `main.py` (line 95) but isn't documented anywhere in this file's endpoint tables or Project Structure tree.** It's a real, live router — add it to both.
+- **The "Officially Supported Apps" list above (5 apps) is out of date relative to the router list two sections down** — `main.py` registers 14 routers, covering pachinball, leaderboard, adventure, vps_browser, models, mods, presets, textures, and deploy, none of which appear in the "Officially Supported Apps" summary.
+- **The Testing Instructions table documents 5 test files; `tests/` actually has 12** (`test_clip_stacker_router.py`, `test_deploy_and_share_targets.py`, `test_ftp_client_retry.py`, `test_mod_router.py`, `test_notes_router.py`, `test_presets_random.py`, `test_shader_list_webhook.py`, `test_storage_manager.py` are undocumented).
+- Recent history is 11 consecutive commits titled just `fix` with no body (`git log --oneline -12`) — not a code problem, but it means `git log` won't help future agents figure out what changed recently; check `git show` on those commits individually if you need the detail.
+- **`webhooks.py` has two known-incomplete handlers**: the `/webhook/flac` handler only auto-indexes song uploads and explicitly does not handle `save_playlist`/`save_metadata` (`packages/python-bridge/app/webhooks.py:358`, `# TODO: Add handling for "save_playlist" and "save_metadata" (JSON only)`), and `/webhook/sequencer` doesn't support JSON project saves (`webhooks.py:398`, `# TODO: Add JSON project saving for "save_project"`). Both `TODO`s predate this doc pass but are still unaddressed in the current tree.
+- **Two stale `api.py` backups sit in `packages/python-bridge/app/`**: `api.py.backup` (Apr 26) and `api.py.bak.20260331_084527` (Mar 26/31) — neither is imported or referenced anywhere; they're dead weight that makes it easy to accidentally grep/edit the wrong file when hunting for API logic. Safe to delete once confirmed unneeded, or move out of the app package.
+
 
 ### GitHub Actions CI/CD
 
