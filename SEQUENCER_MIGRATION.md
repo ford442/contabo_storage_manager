@@ -4,7 +4,12 @@ This document describes the migration from HuggingFace Spaces storage to the Con
 
 ## Overview
 
-The web_sequencer now uses the Contabo VPS at `https://storage.noahcohn.com:8000` instead of the HuggingFace Spaces backend at `https://ford442-storage-manager.hf.space`.
+The web_sequencer now uses the Contabo VPS at `https://storage.noahcohn.com` instead of the HuggingFace Spaces backend at `https://ford442-storage-manager.hf.space`.
+
+> **Do not use port 8000 from browsers.** The Python bridge listens on plain HTTP on :8000;
+> TLS is terminated by nginx on 443 (`config/storage.noahcohn.com.conf`), which proxies
+> `/api/` and `/webhook/` to the bridge. An `https://…:8000` URL fails in Chromium with
+> `net::ERR_SSL_PROTOCOL_ERROR`. Always use `https://storage.noahcohn.com`.
 
 ## New API Endpoints
 
@@ -111,7 +116,7 @@ Updated the API base URL:
 export const API_BASE_URL = "https://ford442-storage-manager.hf.space";
 
 // New
-export const API_BASE_URL = "https://storage.noahcohn.com:8000";
+export const API_BASE_URL = "https://storage.noahcohn.com";
 ```
 
 ### TTS Model Loading (Optional)
@@ -126,7 +131,7 @@ To serve TTS models from the VPS instead of HuggingFace:
 // const baseUrl = 'https://huggingface.co/Supertone/supertonic/resolve/main/onnx';
 
 // Load from VPS:
-const baseUrl = 'https://storage.noahcohn.com:8000/models/tts';
+const baseUrl = 'https://storage.noahcohn.com/models/tts';
 ```
 
 ## Migration Checklist
@@ -147,13 +152,13 @@ Test the endpoints:
 
 ```bash
 # Health check
-curl https://storage.noahcohn.com:8000/api/sequencer/health
+curl https://storage.noahcohn.com/api/sequencer/health
 
 # List songs
-curl https://storage.noahcohn.com:8000/api/songs
+curl https://storage.noahcohn.com/api/songs
 
 # Upload song
-curl -X POST https://storage.noahcohn.com:8000/api/songs \
+curl -X POST https://storage.noahcohn.com/api/songs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Test Song",
@@ -165,7 +170,7 @@ curl -X POST https://storage.noahcohn.com:8000/api/songs \
   }'
 
 # Check TTS models
-curl https://storage.noahcohn.com:8000/models/tts/health
+curl https://storage.noahcohn.com/models/tts/health
 ```
 
 ## Troubleshooting
@@ -174,7 +179,7 @@ curl https://storage.noahcohn.com:8000/models/tts/health
 
 If you see CORS errors in the browser:
 1. Check that the CORS middleware is properly configured in `main.py`
-2. Verify the `OPTIONS` handler is working: `curl -X OPTIONS https://storage.noahcohn.com:8000/api/songs`
+2. Verify the `OPTIONS` handler is working: `curl -X OPTIONS https://storage.noahcohn.com/api/songs`
 
 ### File Not Found
 
