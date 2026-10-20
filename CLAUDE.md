@@ -66,4 +66,5 @@ Check server logs after triggering it.
 - Changing `static_base_url` in `config.py` without updating nginx alias path
 - Removing `Accept-Ranges` from nginx `/files/` block — audio seeking breaks
 - Changing the URL resolution logic in `/api/songs` to not prefer `filename` — old-URL songs 404
+- Pointing clients at `https://storage.noahcohn.com:8000` — :8000 is plain HTTP (nginx terminates TLS on 443), so browsers fail with `ERR_SSL_PROTOCOL_ERROR`. Clients must use `https://storage.noahcohn.com`
 - Changing `/data/files/audio/music/` path without updating `files_dir` in config

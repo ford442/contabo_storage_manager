@@ -458,7 +458,7 @@ All share the **same single FTP account** configured in `.env`.
 PAYLOAD='{"action":"save_shader","name":"chromatic-aberration","data":{"type":"fragment","uniforms":{"strength":0.8}}}'
 SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
 
-curl -X POST https://VPS_IP:8000/webhook/image-effects \
+curl -X POST https://storage.noahcohn.com/webhook/image-effects \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIG" \
   -d "$PAYLOAD"
@@ -470,7 +470,7 @@ curl -X POST https://VPS_IP:8000/webhook/image-effects \
 PAYLOAD='{"action":"save_output","name":"sunset-render","data":{"width":1920,"height":1080,"format":"webp"}}'
 SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
 
-curl -X POST https://VPS_IP:8000/webhook/image-effects \
+curl -X POST https://storage.noahcohn.com/webhook/image-effects \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIG" \
   -d "$PAYLOAD"
@@ -479,7 +479,7 @@ curl -X POST https://VPS_IP:8000/webhook/image-effects \
 **Configure in your app:**
 
 ```js
-const STORAGE_URL = "https://VPS_IP:8000";
+const STORAGE_URL = "https://storage.noahcohn.com";
 await fetch(`${STORAGE_URL}/webhook/image-effects`, {
   method: "POST",
   headers: {
@@ -493,7 +493,7 @@ await fetch(`${STORAGE_URL}/webhook/image-effects`, {
 **Generate and upload shader lists from VPS:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/image-effects/generate-shader-lists \
+curl -X POST https://storage.noahcohn.com/webhook/image-effects/generate-shader-lists \
   -H "X-Webhook-Token: YOUR_SHADER_GENERATION_TOKEN"
 ```
 
@@ -554,7 +554,7 @@ audio.play();
 PAYLOAD='{"action":"save_project","name":"my-track","data":{"bpm":120,"tracks":[]}}'
 SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
 
-curl -X POST https://VPS_IP:8000/webhook/sequencer \
+curl -X POST https://storage.noahcohn.com/webhook/sequencer \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIG" \
   -d "$PAYLOAD"
@@ -563,7 +563,7 @@ curl -X POST https://VPS_IP:8000/webhook/sequencer \
 **Example — upload a MIDI file:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/sequencer \
+curl -X POST https://storage.noahcohn.com/webhook/sequencer \
   -F "action=upload_midi" \
   -F "file=@bassline.mid"
 ```
@@ -571,7 +571,7 @@ curl -X POST https://VPS_IP:8000/webhook/sequencer \
 **Example — upload an audio sample:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/sequencer \
+curl -X POST https://storage.noahcohn.com/webhook/sequencer \
   -F "action=upload_sample" \
   -F "file=@kick.wav"
 ```
@@ -579,7 +579,7 @@ curl -X POST https://VPS_IP:8000/webhook/sequencer \
 **Example — upload an exported recording:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/sequencer \
+curl -X POST https://storage.noahcohn.com/webhook/sequencer \
   -F "action=upload_recording" \
   -F "file=@final-mix.mp3"
 ```
@@ -623,7 +623,7 @@ Notes are exposed through a simple REST API and are also watched by the file wat
 **Example — write a note:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/api/notes/write/project-ideas \
+curl -X POST https://storage.noahcohn.com/api/notes/write/project-ideas \
   -H "Content-Type: application/json" \
   -d '{"content": "- Build a universal upload dashboard\n- Sync GCS bucket to VPS automatically"}'
 ```
@@ -631,13 +631,13 @@ curl -X POST https://VPS_IP:8000/api/notes/write/project-ideas \
 **Example — read a note:**
 
 ```bash
-curl https://VPS_IP:8000/api/notes/read/project-ideas
+curl https://storage.noahcohn.com/api/notes/read/project-ideas
 ```
 
 **Example — save a note with a title:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/api/notes/save \
+curl -X POST https://storage.noahcohn.com/api/notes/save \
   -H "Content-Type: application/json" \
   -d '{"title": "Project Ideas", "content": "- Build universal upload dashboard", "tags": "todo"}'
 ```
@@ -675,7 +675,7 @@ The `cloud_notes` app can send notes to `POST /webhook/notes` for webhook-based 
 **Example — webhook sync from cloud_notes:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/notes \
+curl -X POST https://storage.noahcohn.com/webhook/notes \
   -H "Content-Type: application/json" \
   -d '{
     "source": "cloud_notes",
@@ -692,7 +692,7 @@ curl -X POST https://VPS_IP:8000/webhook/notes \
 **Example — direct API sync:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/api/notes/sync \
+curl -X POST https://storage.noahcohn.com/api/notes/sync \
   -H "Content-Type: application/json" \
   -d '{
     "source": "cloud_notes",
@@ -709,7 +709,7 @@ curl -X POST https://VPS_IP:8000/api/notes/sync \
 **Example — batch sync multiple notes:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/api/notes/sync/batch \
+curl -X POST https://storage.noahcohn.com/api/notes/sync/batch \
   -H "Content-Type: application/json" \
   -d '{
     "notes": [
@@ -802,7 +802,7 @@ No HMAC signature is required — these endpoints are designed for direct browse
 **Example — save a project:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/clip-stacker \
+curl -X POST https://storage.noahcohn.com/webhook/clip-stacker \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-edit",
@@ -816,13 +816,13 @@ curl -X POST https://VPS_IP:8000/webhook/clip-stacker \
 **Example — list projects:**
 
 ```bash
-curl https://VPS_IP:8000/webhook/clip-stacker
+curl https://storage.noahcohn.com/webhook/clip-stacker
 ```
 
 **Example — upload media:**
 
 ```bash
-curl -X POST https://VPS_IP:8000/webhook/clip-stacker/media \
+curl -X POST https://storage.noahcohn.com/webhook/clip-stacker/media \
   -F "file=@intro.mp4" \
   -F "name=intro.mp4"
 ```
@@ -831,23 +831,23 @@ curl -X POST https://VPS_IP:8000/webhook/clip-stacker/media \
 
 ```bash
 # List all media files
-curl https://VPS_IP:8000/webhook/clip-stacker/media
+curl https://storage.noahcohn.com/webhook/clip-stacker/media
 
 # List media files with a specific prefix (e.g., clip UUID)
-curl "https://VPS_IP:8000/webhook/clip-stacker/media?prefix=clip-uuid-123"
+curl "https://storage.noahcohn.com/webhook/clip-stacker/media?prefix=clip-uuid-123"
 ```
 
 **Example — delete a media file:**
 
 ```bash
-curl -X DELETE https://VPS_IP:8000/webhook/clip-stacker/media/clip-uuid-123-original.mp4
+curl -X DELETE https://storage.noahcohn.com/webhook/clip-stacker/media/clip-uuid-123-original.mp4
 ```
 
 **Example — delete a project with associated media cleanup:**
 
 ```bash
 # Delete project and attempt to remove its associated media files
-curl -X DELETE "https://VPS_IP:8000/webhook/clip-stacker?name=my-project&deleteMedia=true"
+curl -X DELETE "https://storage.noahcohn.com/webhook/clip-stacker?name=my-project&deleteMedia=true"
 ```
 
 **In the clip_stacker app config:**
@@ -895,7 +895,7 @@ await fetch(`${STORAGE_URL}/webhook/clip-stacker?name=my-edit&deleteMedia=true`,
 
 | Method | Base URL | Use case |
 |---|---|---|
-| Python bridge | `https://VPS_IP:8000/files/` | Webhook host also serves files |
+| Python bridge | `https://storage.noahcohn.com/files/` | Webhook host also serves files |
 | Nginx container | `https://VPS_IP:8080/` (or behind TLS proxy) | Dedicated static server, better for large files / range requests |
 
 Set `STATIC_BASE_URL` in `.env` to the public HTTPS URL your apps should use.
