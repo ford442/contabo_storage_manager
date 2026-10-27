@@ -151,3 +151,22 @@ def test_acao_tokens_collapses_stacked_wildcard():
     _set_single_acao(headers, tokens[0])
     assert headers.getlist("access-control-allow-origin") == ["*"]
     assert "," not in headers["access-control-allow-origin"]
+
+
+def test_storage_1ink_models_apache_config_emits_single_acao():
+    config = (ROOT / "deploy" / "models_htaccess").read_text()
+    directives = [
+        line.strip()
+        for line in config.splitlines()
+        if line.strip().lower().startswith("header")
+        and "access-control-allow-origin" in line.lower()
+    ]
+
+    assert directives == [
+        "Header unset Access-Control-Allow-Origin",
+        "Header always unset Access-Control-Allow-Origin",
+        'Header always set Access-Control-Allow-Origin "*"',
+    ]
+
+    sync_script = (ROOT / "scripts" / "sync_models_to_1ink.sh").read_text()
+    assert 'put "$HTACCESS_SRC" -o "$REMOTE_DIR/.htaccess"' in sync_script
