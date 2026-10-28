@@ -51,6 +51,7 @@ Check server logs after triggering it.
 | `packages/python-bridge/app/config.py` | `static_base_url`, `files_dir`, CORS origins |
 | `packages/python-bridge/app/main.py` | FastAPI app, router registration order |
 | `config/storage.noahcohn.com.conf` | Nginx — proxies `/api/` to :8000, serves `/files/` statically |
+| `packages/python-bridge/app/clip_stacker_jobs.py` | clip-stacker `/webhook/clip-stacker/jobs` (extract / splice / rife via ffmpeg); outputs land in `clip-stacker/media/` |
 
 ## Known issues / blockers
 

@@ -280,6 +280,16 @@ contabo_storage_manager/
 | `POST` | `/api/notes/sync/batch` | Batch sync multiple notes |
 | `DELETE`| `/api/notes/delete/{name}` | Delete a note |
 
+**clip_stacker** (`app/webhooks.py` for projects/media, `app/clip_stacker_jobs.py` for jobs):
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST`/`GET`/`DELETE` | `/webhook/clip-stacker` | Save / load-or-list / delete projects |
+| `POST`/`GET` | `/webhook/clip-stacker/media` | Upload / list media (list answers `{"media": [...]}`) |
+| `DELETE` | `/webhook/clip-stacker/media/{filename}` | Delete a media file |
+| `POST` | `/webhook/clip-stacker/jobs` | Create an `extract` / `splice` / `rife` job (202) — see README |
+| `GET` | `/webhook/clip-stacker/jobs/{jobId}` | Poll a job |
+| `POST` | `/webhook/clip-stacker/jobs/{jobId}/cancel` | Cancel a job (409 once finished) |
+
 **Webhook for cloud_notes:**
 | `POST` | `/webhook/notes` | cloud_notes webhook-based sync (no HMAC required) |
 
@@ -470,6 +480,11 @@ Copy `.env.example` to `.env` and configure:
 | `POLL_INTERVAL_SECONDS` | `60` | Polling interval |
 | `FLAC_PLAYER_API_URL` | *(empty)* | External FLAC Player backend URL for auto-registration |
 | `EXTERNAL_FLAC_DIR` | `flac_songs` | Remote folder for FLAC song mirroring |
+| `CLIP_STACKER_AUTH_TOKEN` | *(empty)* | When set, clip-stacker **job** endpoints require `Authorization: Bearer <token>` (the other clip-stacker routes stay open) |
+| `CLIP_STACKER_MAX_CONCURRENT_JOBS` | `1` | Jobs running at once; the rest stay `queued` |
+| `CLIP_STACKER_MAX_SOURCE_MB` | `20480` | Largest Drive/remote source a job will download |
+| `CLIP_STACKER_JOB_RETENTION_DAYS` | `7` | Job folders older than this are pruned when a job is created |
+| `CLIP_STACKER_RIFE_COMMAND` | *(empty)* | RIFE command for `rife` jobs, e.g. `python /opt/rife/inference_video.py --input {input} --output {output} --multi {multiplier}`; split with shlex, run without a shell. Unset = `rife` jobs answer 501 |
 
 ---
 

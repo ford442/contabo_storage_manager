@@ -78,6 +78,19 @@ class Settings(BaseSettings):
     deploy_auth_token: Optional[str] = None
     flac_player_base_url: str = "https://test.1ink.us"
 
+    # clip-stacker processing jobs (/webhook/clip-stacker/jobs)
+    # When set, job endpoints require `Authorization: Bearer <token>`. Unset keeps
+    # them open like the other clip-stacker routes.
+    clip_stacker_auth_token: Optional[str] = None
+    clip_stacker_max_concurrent_jobs: int = 1
+    # Refuse to download a job source larger than this (Drive / remote URL).
+    clip_stacker_max_source_mb: int = 20480
+    # Finished job folders older than this are pruned when a new job is created.
+    clip_stacker_job_retention_days: int = 7
+    # RIFE worker command, e.g. "python /opt/rife/inference_video.py --input {input} --output {output} --multi {multiplier}".
+    # Split with shlex and run without a shell. Unset = rife jobs fail with a clear error.
+    clip_stacker_rife_command: Optional[str] = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
