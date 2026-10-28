@@ -13,6 +13,7 @@ from .cors import build_cors_middleware_options
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 from .webhooks import webhook_router, files_router
+from .clip_stacker_jobs import jobs_router as clip_stacker_jobs_router
 from .api import api_router
 from .models_router import models_router
 from .audio_router import audio_router
@@ -79,6 +80,7 @@ async def startup_event():
 
 # Include routers
 app.include_router(webhook_router)
+app.include_router(clip_stacker_jobs_router)  # ← clip-stacker extract/splice/rife jobs (/webhook/clip-stacker/jobs)
 app.include_router(files_router)        # ← Static files router
 app.include_router(api_router)          # ← API endpoints for shaders, images, ratings
 app.include_router(models_router)       # ← Model serving with range header support

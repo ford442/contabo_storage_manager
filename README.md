@@ -794,8 +794,31 @@ await fetch(`${STORAGE_URL}/api/notes/sync`, {
 | `POST` | `/webhook/clip-stacker/media` | Upload media file (`multipart/form-data`) |
 | `GET` | `/webhook/clip-stacker/media?prefix=...` | List media files (optional prefix filter) |
 | `DELETE` | `/webhook/clip-stacker/media/{filename}` | Delete a media file |
+| `POST` | `/webhook/clip-stacker/jobs` | Start an `extract` / `splice` / `rife` job (202) |
+| `GET` | `/webhook/clip-stacker/jobs/{jobId}` | Job status, progress and result |
+| `POST` | `/webhook/clip-stacker/jobs/{jobId}/cancel` | Cancel a queued or running job |
 
-**Storage:** `files/clip-stacker/`
+**Storage:** `files/clip-stacker/` (`projects/`, `media/`, and `jobs/{jobId}/` for job records)
+
+**Processing jobs** (`app/clip_stacker_jobs.py`) cut large media server-side for clip_stacker's segment extract/replace. Body of `POST .../jobs`:
+
+```json
+{
+  "type": "extract",
+  "source": { "kind": "drive", "fileId": "…", "accessToken": "ya29…", "name": "big.mp4" },
+  "startSec": 120.0, "endSec": 150.0,
+  "outputName": "scene3.mp4"
+}
+```
+
+- `source.kind`: `drive` (downloaded with the user's Google token, which is used for the download only and never written to disk), `remote` (public http(s) URL; private/loopback addresses are refused; our own `clip-stacker/media` URLs are read in place) or `media` (a file name already in `clip-stacker/media`).
+- `extract` runs `ffmpeg -ss/-to -c copy` when the start sits on a keyframe, and otherwise (or if the copy is not the requested length) cuts exactly with a re-encode. The result reports `method` (`copy` / `reencode`) and the measured `durationSec`; a job fails rather than return a segment that is not the requested length (stream copy may run up to 0.25 s long; clip_stacker trims it).
+- `splice` takes `parts: [{source, startSec?, endSec?}, …]` and joins them with the concat demuxer (`-c copy`); parts whose codec/size/fps differ are normalized to the first part first.
+- `rife` cuts (optional) and runs `CLIP_STACKER_RIFE_COMMAND`, then restores the segment's audio. Only `params.mode: "interpolation"` (length-preserving) with `multiplier` 2 or 4 is accepted. Without the env var the server answers `501`.
+- The output is moved into `files/clip-stacker/media/` and returned as `result.url`, so the existing list/delete routes manage it. Existing names are never overwritten.
+- Poll `GET .../jobs/{jobId}` (`status`: `queued` → `running` → `succeeded` / `failed` / `cancelled`). A job orphaned by a restart is reported `failed`.
+
+`job.json` and `ffmpeg.log` under `files/clip-stacker/jobs/{jobId}/` are served by nginx like any file under `/files/`; the job id is unguessable and neither file contains a token. Job folders are pruned after `CLIP_STACKER_JOB_RETENTION_DAYS`.
 
 No HMAC signature is required — these endpoints are designed for direct browser-to-server sync.
 
